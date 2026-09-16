@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>盘扣架规范问答 · JGJ/T 231-2021 第 5 章</title>
+<style>
+  :root{--fg:#1f2937;--muted:#6b7280;--line:#e5e7eb;--accent:#b45309;--bg:#f9fafb;--card:#fff}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:"Microsoft YaHei","Segoe UI",system-ui,sans-serif;color:var(--fg);background:var(--bg);line-height:1.7}
+  header{background:#fff;border-bottom:1px solid var(--line);padding:14px 22px}
+  header h1{margin:0;font-size:17px}
+  header .sub{color:var(--muted);font-size:12.5px;margin-top:3px}
+  .wrap{max-width:1240px;margin:0 auto;padding:18px 22px 60px;display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:18px}
+  @media(max-width:1020px){.wrap{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin-bottom:16px}
+  .ask{display:flex;gap:10px}
+  .ask input{flex:1;padding:11px 13px;font-size:15px;border:1px solid var(--line);border-radius:8px;font-family:inherit}
+  .ask input:focus{outline:2px solid #fcd34d;border-color:#fcd34d}
+  .ask button{padding:11px 20px;font-size:15px;border:0;border-radius:8px;background:var(--accent);color:#fff;cursor:pointer;font-family:inherit}
+  .ask button:disabled{background:#d1d5db;cursor:default}
+  .examples{margin-top:10px;display:flex;flex-wrap:wrap;gap:7px}
+  .examples span{font-size:12.5px;color:#374151;background:#f3f4f6;border:1px solid var(--line);border-radius:999px;padding:3px 11px;cursor:pointer}
+  .examples span:hover{background:#fde68a;border-color:#fcd34d}
+  h2{font-size:14px;margin:0 0 10px;color:#111827}
+  #answer{white-space:pre-wrap;font-size:15px}
+  #answer .cite{background:#fef3c7;border:1px solid #fcd34d;border-radius:4px;padding:0 4px;font-size:13px;color:#92400e;white-space:nowrap}
+  .badges{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  .badge{font-size:12.5px;border-radius:6px;padding:2px 9px;border:1px solid}
+  .ok{background:#ecfdf5;border-color:#a7f3d0;color:#065f46}
+  .warn{background:#fffbeb;border-color:#fde68a;color:#92400e}
+  .bad{background:#fef2f2;border-color:#fecaca;color:#991b1b}
+  .muted{color:var(--muted);font-size:13px}
+  .ctx{border:1px solid var(--line);border-radius:8px;padding:9px 11px;margin-bottom:8px;background:#fcfcfd}
+  .ctx .hd{font-size:13px;font-weight:600;color:#111827}
+  .ctx .bd{font-size:12.5px;color:#4b5563;white-space:pre-wrap;max-height:170px;overflow:auto;margin-top:5px}
+  .ctx img{max-width:100%;border:1px solid var(--line);border-radius:6px;margin-top:6px}
+  .ctx table{width:100%;border-collapse:collapse;font-size:12px;margin-top:6px}
+  .ctx th,.ctx td{border:1px solid var(--line);padding:3px 6px;text-align:left}
+  .ctx th{background:#f9fafb}
+  #status{font-size:13px;color:var(--muted);min-height:20px;margin-bottom:6px}
+  .row{display:flex;gap:8px;align-items:center;font-size:12.5px;color:var(--muted)}
+  details summary{cursor:pointer;font-size:13px;color:#374151}
+  .hit{font-family:Consolas,monospace;font-size:12px;color:#4b5563}
+</style>
+</head>
+<body>
+<header>
+  <h1>盘扣架规范问答 · JGJ/T 231-2021《第 5 章 结构设计》</h1>
+  <div class="sub">结构感知解析（72 节点）· BM25 + bge-m3 混合检索 · 引用闭包扩展 · 本地 qwen3.8-27b 生成 · 答案带条号并回查原文</div>
+</header>
+
+<div class="wrap">
+  <div>
+    <div class="card">
+      <div class="ask">
+        <input id="q" placeholder="例如：双排架2步3跨布置时立杆计算长度系数是多少" autofocus>
+        <button id="btn">提问</button>
+      </div>
+      <div class="examples" id="ex"></div>
+    </div>
+
+    <div class="card">
+      <div id="status"></div>
+      <details id="thinkBox" style="display:none;margin-bottom:8px">
+        <summary>模型思考中…（本地推理模型，思考完才出答案）</summary>
+        <div id="thinking" class="muted" style="max-height:150px;overflow:auto;white-space:pre-wrap;font-size:12.5px;margin-top:6px"></div>
+      </details>
+      <div id="answer" class="muted">输入问题后，答案会流式出现在这里。</div>
+      <div class="badges" id="badges"></div>
+    </div>
+
+    <div class="card">
+      <details id="trace">
+        <summary>查看召回过程（混合检索 + 闭包扩展）</summary>
+        <div id="hits" style="margin-top:10px"></div>
+      </details>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <h2>依据材料</h2>
+      <div id="ctx" class="muted">（提问后显示）</div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const EXAMPLES = [
+  "双排架2步3跨布置时立杆计算长度系数是多少",
+  "可调托撑的承载力设计值是多少",
+  "搭设高度24m时支撑架高度调整系数取多少",
+  "立杆稳定性应该怎么验算",
+  "连墙件的稳定性怎么计算",
+  "受弯构件的容许挠度是多少",
+  "钢材的强度设计值去哪里查",
+  "5.4.2 说了什么",
+  "图5.1.4 是什么",
+  "盘扣架立杆的颜色有什么要求"
+];
+EXAMPLES.forEach(t => {
+  const s = document.createElement("span");
+  s.textContent = t;
+  s.onclick = () => { $("#q").value = t; ask(); };
+  $("#ex").appendChild(s);
+});
+
+function esc(s){return (s||"").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));}
+// 本地模型习惯输出 LaTeX，页面上没有数学渲染器，做一层轻量转换让公式可读
+function tex(t){
+  return t
+    .replace(/\$\$?([^$]+)\$\$?/g, (m, x) => x)
+    .replace(/\\frac\{([^{}]+)\}\{([^{}]+)\}/g, "$1/$2")
+    .replace(/\\(varphi|phi)\b/g, "φ").replace(/\\lambda\b/g, "λ")
+    .replace(/\\beta\b/g, "β").replace(/\\mu\b/g, "μ").replace(/\\gamma\b/g, "γ")
+    .replace(/\\sum\b/g, "∑").replace(/\\times\b/g, "×").replace(/\\cdot\b/g, "·")
+    .replace(/\\leqslant|\\leq\b|\\le\b/g, "≤").replace(/\\geqslant|\\geq\b/g, "≥")
+    .replace(/\\text\{([^{}]*)\}/g, "$1").replace(/\\mathrm\{([^{}]*)\}/g, "$1")
+    .replace(/\\left|\\right/g, "").replace(/\\([a-zA-Z]+)/g, "$1")
+    .replace(/_\{([^{}]+)\}/g, "$1").replace(/\^\{([^{}]+)\}/g, "^$1");
+}
+function fmt(t){
+  return tex(esc(t))
+    .replace(/\[来源[：:]\s*([^\]]+)\]/g, '<span class="cite">［$1］</span>')
+    .replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+}
+
+function renderContexts(list){
+  const box = $("#ctx");
+  if(!list || !list.length){ box.innerHTML = '<span class="muted">（无）</span>'; return; }
+  box.innerHTML = "";
+  list.forEach(c => {
+    const d = document.createElement("div");
+    d.className = "ctx";
+    d.innerHTML = `<div class="hd">${esc(c.label)}　<span class="muted">p.${(c.pages||[]).join("/")}　${esc(c.type)}</span></div>`;
+    const img = c.image_path ? `<img src="/api/node/${encodeURIComponent(c.node_id)}" style="display:none">` : "";
+    d.innerHTML += img;
+    const body = document.createElement("div");
+    body.className = "bd";
+    body.textContent = "（点击标题展开原文）";
+    d.querySelector(".hd").style.cursor = "pointer";
+    d.querySelector(".hd").onclick = () => loadNode(c, body, d);
+    d.appendChild(body);
+    box.appendChild(d);
+  });
+}
+
+async function loadNode(c, body, d){
+  body.textContent = "载入中…";
+  const r = await fetch(`/api/node/${encodeURIComponent(c.node_id)}`);
+  const n = await r.json();
+  let html = `<div>${esc(n.content)}</div>`;
+  if(n.type === "table" && n.body){
+    const mk = n.body.markdown_flat || n.body.markdown || "";
+    html += mk.split("\n").filter(x=>x.trim()).map(x=>{
+      const cells = x.split("|").slice(1,-1).map(s=>s.trim());
+      if(cells.every(s=>/^-+$/.test(s))) return "";
+      const tag = cells.every(s=>/^-+$/.test(s)) ? "th" : "td";
+      return "<tr>" + cells.map(s=>`<td>${esc(s)}</td>`).join("") + "</tr>";
+    }).join("");
+    html = `<div>${esc(n.content)}</div><table>${html}</table>`;
+  }
+  if(n.type === "figure" && n.body){
+    html = `<div>${esc(n.body.title)}</div><div class="muted">${esc((n.body.legend||[]).join("；"))}</div>`;
+  }
+  if(n.type === "formula" && n.body){
+    html = `<div><b>式（${esc(n.body.equation_id)}）</b>　<span class="hit">${esc(n.body.linear_text||"")}</span></div>`
+         + `<div class="muted">式中：${esc((n.body.variables||[]).map(v=>v.symbol+"——"+v.meaning).join("；"))}</div>`;
+  }
+  body.innerHTML = html;
+  const pages = n.pages || [];
+  const boxes = (n.bboxes || []).map((b, i) => ({page: pages[i] || pages[0], box: b}));
+  let imgs = "";
+  const byPage = {};
+  boxes.forEach(({page, box}) => {
+    if(!page) return;
+    const flat = Array.isArray(box[0]) ? box : [box];
+    (byPage[page] = byPage[page] || []).push(...flat.map(b => b.join(",")));
+  });
+  Object.entries(byPage).forEach(([page, bs]) => {
+    imgs += `<div class="muted" style="margin-top:6px">原文高亮 p.${page}</div>
+             <img src="/api/page/${page}?boxes=${encodeURIComponent(bs.join(";"))}">`;
+  });
+  body.innerHTML = html + imgs;
+}
+
+function badge(text, cls){ return `<span class="badge ${cls}">${esc(text)}</span>`; }
+
+async function ask(){
+  const q = $("#q").value.trim();
+  if(!q) return;
+  $("#btn").disabled = true;
+  $("#answer").innerHTML = "";
+  $("#badges").innerHTML = "";
+  $("#hits").innerHTML = "";
+  $("#status").textContent = "检索中…";
+  const t0 = performance.now();
+  try{
+    const res = await fetch("/api/ask", {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify({question:q})
+    });
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = "", acc = "", first = null, rsn = "", firstRsn = null;
+    while(true){
+      const {done, value} = await reader.read();
+      if(done) break;
+      buf += dec.decode(value, {stream:true});
+      const parts = buf.split("\n\n"); buf = parts.pop();
+      for(const p of parts){
+        const ev = (p.match(/^event: (.+)$/m)||[])[1];
+        const dt = (p.match(/^data: (.+)$/m)||[])[1];
+        if(!ev || !dt) continue;
+        const data = JSON.parse(dt);
+        if(ev === "meta"){
+          renderContexts(data.contexts);
+          const exp = (data.hits||[]).map(h => h.expanded_query).find(Boolean);
+          const head = exp ? `<div class="muted" style="margin-bottom:6px">同义词扩展 → ${esc(exp)}</div>` : "";
+          $("#hits").innerHTML = head + (data.hits||[]).map(h =>
+            `<div class="hit">${h.type.padEnd(9)} ${String(h.num).padEnd(10)} ${h.score} ${h.via_graph?"←图扩展":""}</div>`).join("");
+          $("#status").textContent = `已检索 ${data.hits.length} 个节点，正在生成…`;
+        } else if(ev === "delta"){
+          if(first === null) first = performance.now();
+          acc += data.text;
+          $("#answer").innerHTML = fmt(acc) + ' <span class="muted">▍</span>';
+        } else if(ev === "reasoning"){
+          if(firstRsn === null){ firstRsn = performance.now(); $("#thinkBox").style.display = "block"; }
+          rsn += data.text;
+          $("#thinking").textContent = rsn;
+          $("#status").textContent = `模型思考中…（已 ${rsn.length} 字）`;
+        } else if(ev === "done"){
+          $("#answer").innerHTML = fmt(data.answer);
+          const secs = ((performance.now()-t0)/1000).toFixed(1);
+          const ttft = first ? ((first-t0)/1000).toFixed(1) : "?";
+          const trs = firstRsn ? ((firstRsn-t0)/1000).toFixed(1) : "?";
+          const bs = [];
+          if(rsn.length){
+            $("#thinkBox").querySelector("summary").textContent =
+              `模型思考过程（${rsn.length} 字，${trs}s 起）`;
+            bs.push(badge(`思考 ${trs}s · 答案首字 ${ttft}s · 总 ${secs}s`, "ok"));
+          } else {
+            $("#thinkBox").style.display = "none";
+            bs.push(badge(`首字 ${ttft}s · 总 ${secs}s`, "ok"));
+          }
+          bs.push(badge(`引用 ${data.citations.length} 处`, data.citations.length ? "ok" : "warn"));
+          if(data.secondary_citations.length) bs.push(badge(`材料转述引用 ${data.secondary_citations.length} 处`, "warn"));
+          bs.push(badge(data.citation_ok ? "引用全部可溯源" : `无效引用 ${data.invalid_citations.length}`, data.citation_ok ? "ok" : "bad"));
+          if(data.refused) bs.push(badge("材料内未规定 · 已拒答", "ok"));
+          $("#badges").innerHTML = bs.join("");
+          $("#status").textContent = "";
+        } else if(ev === "error"){
+          $("#answer").innerHTML = `<span class="badge bad">生成失败：${esc(data.message)}</span>`;
+          $("#status").textContent = "";
+        }
+      }
+    }
+  }catch(e){
+    $("#answer").innerHTML = `<span class="badge bad">请求失败：${esc(e.message)}</span>`;
+  }
+  $("#btn").disabled = false;
+}
+$("#btn").onclick = ask;
+$("#q").addEventListener("keydown", e => { if(e.key === "Enter") ask(); });
+</script>
+</body>
+</html>

@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
+
+# 编辑器
+.idea/
+.vscode/
+
+# 运行期产物（每次启动重新生成）
+out/_app_pid.txt
+
+# 索引产物：可由 out/nodes.jsonl 重新生成，且 embeddings.json 有 1.8MB
+out/index/
+out/index_diag/
+
+# Office 临时锁文件
+~$*
+
+# ---- 以下内容不入库，需本地自备 ----
+# 规范原文（受著作权保护，不适合推送到远端）
+盘扣规范/
+jgj 231-2021_test.pdf
+# 含硬编码的 RAGFlow API key，改用环境变量后再说
+ragflow_output.py
