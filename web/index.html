@@ -33,7 +33,7 @@
   .muted{color:var(--muted);font-size:13px}
   .ctx{border:1px solid var(--line);border-radius:8px;padding:9px 11px;margin-bottom:8px;background:#fcfcfd}
   .ctx .hd{font-size:13px;font-weight:600;color:#111827}
-  .ctx .bd{font-size:12.5px;color:#4b5563;white-space:pre-wrap;max-height:170px;overflow:auto;margin-top:5px}
+  .ctx .bd{font-size:12.5px;color:#4b5563;white-space:pre-wrap;max-height:360px;overflow:auto;margin-top:5px}
   .ctx img{max-width:100%;border:1px solid var(--line);border-radius:6px;margin-top:6px}
   .ctx table{width:100%;border-collapse:collapse;font-size:12px;margin-top:6px}
   .ctx th,.ctx td{border:1px solid var(--line);padding:3px 6px;text-align:left}
@@ -46,8 +46,8 @@
 </head>
 <body>
 <header>
-  <h1>盘扣架规范问答 · JGJ/T 231-2021《第 5 章 结构设计》</h1>
-  <div class="sub">结构感知解析（72 节点）· BM25 + bge-m3 混合检索 · 引用闭包扩展 · 本地 qwen3.8-27b 生成 · 答案带条号并回查原文</div>
+  <h1>盘扣架规范问答 · <!--PROFILE--></h1>
+  <div class="sub">结构感知解析（<!--NODES--> 节点）· BM25 + bge-m3 混合检索 · 引用闭包扩展 · 本地 qwen3.8-27b 生成 · 答案带条号并回查原文</div>
 </header>
 
 <div class="wrap">
@@ -88,18 +88,7 @@
 
 <script>
 const $ = s => document.querySelector(s);
-const EXAMPLES = [
-  "双排架2步3跨布置时立杆计算长度系数是多少",
-  "可调托撑的承载力设计值是多少",
-  "搭设高度24m时支撑架高度调整系数取多少",
-  "立杆稳定性应该怎么验算",
-  "连墙件的稳定性怎么计算",
-  "受弯构件的容许挠度是多少",
-  "钢材的强度设计值去哪里查",
-  "5.4.2 说了什么",
-  "图5.1.4 是什么",
-  "盘扣架立杆的颜色有什么要求"
-];
+const EXAMPLES = <!--EXAMPLES-->;
 EXAMPLES.forEach(t => {
   const s = document.createElement("span");
   s.textContent = t;

@@ -232,7 +232,11 @@ class TableStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if self.path.exists():
             self.path.unlink()
-        self.conn = sqlite3.connect(self.path)
+        # check_same_thread=False：建索引在 FastAPI 的同步线程池里执行，
+        # 而查询发生在异步事件循环线程——不关掉线程检查会抛
+        # "SQLite objects created in a thread can only be used in that same thread"。
+        # 本类只做"建完后只读查询"，且单进程单请求，关掉是安全的。
+        self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.execute("""
             CREATE TABLE table_rows (
                 node_id TEXT, table_id TEXT, title TEXT, page INTEGER,
