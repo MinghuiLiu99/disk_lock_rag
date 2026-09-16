@@ -50,10 +50,15 @@ class DocumentParser:
         pages = []
         prev_tables: list[dict] = []
         prev_page_no = None
+        notes_from: "int | None" = None      # 条文说明区的起始页
         for idx, page in enumerate(pdf.pages, start=1):
             book_page = idx + self.page_offset
             lines = L.repair_broken_lines(L.drop_running_heads(
                 L.page_lines(page, y_tol=self.y_tol), page))
+            # 条文说明的封面页有"条文说明"字样（实测在 p42），从这一页起进入说明区。
+            # 说明区的条号与正文完全相同（1.0.1 等），不区分会产生重复 node_id。
+            if notes_from is None and "条文说明" in re.sub(r"\s+", "", "".join(l["text"] for l in lines)):
+                notes_from = book_page
             tables = L.real_tables(page, lines)
             for t in tables:
                 t["page"] = book_page
@@ -82,6 +87,7 @@ class DocumentParser:
                           "lines": lines, "tables": real,
                           "figures": figures, "skip": skip,
                           "blocked": blocked,
+                          "notes": notes_from is not None and book_page >= notes_from,
                           "body_size": _body_size(page)})
         return pages
 
@@ -98,8 +104,12 @@ class DocumentParser:
                     segs.append(cur); cur = None
                 continue
             kind = _heading_kind(line, pg["body_size"])
-            if kind is None and L.CLAUSE_RE.match(line["text"]):
-                kind = "clause"
+            if kind is None:
+                clause_re = L.NOTES_CLAUSE_RE if pg.get("notes") else L.CLAUSE_RE
+                if clause_re.match(line["text"]) or L.APPENDIX_CLAUSE_RE.match(line["text"]):
+                    kind = "clause"
+                elif L.APPENDIX_TITLE_RE.match(line["text"]):
+                    kind = "appendix"
             if kind:
                 if cur:
                     segs.append(cur)
@@ -162,11 +172,16 @@ class DocumentParser:
         """
         if require_list and "下列" not in seg_text and "应包括" not in seg_text:
             return
+        # 续接片段里不新起款：只有本条已至少有一款时才继续编号，
+        # 否则会把续接进来的任意"数字开头"的行（如引用标准名录的"9 《…》"）误判成款。
+        if not require_list and state.get("next", 1) <= 1:
+            return
         body = lines[1:] if require_list else lines
         for line in body:
             text = line["text"].strip()
             m = L.ITEM_RE.match(text)
-            if m and int(m.group(1)) == state["next"] and not L.CLAUSE_RE.match(text):
+            if m and int(m.group(1)) == state["next"] and not (
+                    L.CLAUSE_RE.match(text) or L.APPENDIX_CLAUSE_RE.match(text)):
                 node = self.builder.item(
                     clause_num, m.group(1), L.norm_text(text), [bp], [L.line_bbox([line])],
                     keywords=[f"{clause_num}-{m.group(1)}", clause_num])
@@ -188,6 +203,10 @@ class DocumentParser:
 
             if el["kind"] == "table":
                 t = el["table"]
+                # 跨页表头碎片：其表头已被并进下一页的表体，这里不能再单独产出，
+                # 否则同一张表会出现两条同名节点（实测表 4.3.1、表 4.4.4 都中招）。
+                if t.get("merged_into_next"):
+                    continue
                 header_flat = L.flat_header(t["cells"], t["header_rows"])
                 node = b.table(t["table_id"], t["title"], t["cells"], [bp], [t["bbox"]],
                                notes=t["notes"], header_rows=t["header_rows"],
@@ -212,6 +231,28 @@ class DocumentParser:
 
             seg = el["seg"]
             kind = seg["kind"]
+            notes = pg["notes"]
+
+            if notes and kind in ("chapter", "section"):
+                # 说明区的章/节只用来维护上下文，不单独成节点——它们会与正文章节点重号，
+                # 而且作为导航节点价值很低。
+                num, title = _split_heading(seg["lines"][0]["text"])
+                if kind == "chapter":
+                    b.set_context(chapter=f"{num} {title}", section=None)
+                else:
+                    b.set_context(section=f"{num} {title}")
+                current = None
+                continue
+
+            if notes and kind == "clause":
+                targets = _explanation_targets(seg["text"])
+                num = targets[0] if targets else _clause_num(seg["lines"][0]["text"])
+                node = b.explanation(num, L.norm_text(seg["text"]), [bp], [seg["bbox"]],
+                                     keywords=[num, f"第{num}条", "条文说明"])
+                nodes.append(node)
+                self._emit_formulas(nodes, seg["lines"], bp)
+                current = node
+                continue
 
             if kind in ("chapter", "section"):
                 num, title = _split_heading(seg["lines"][0]["text"])
@@ -224,8 +265,16 @@ class DocumentParser:
                 current = None
                 continue
 
+            if kind == "appendix":
+                m = L.APPENDIX_TITLE_RE.match(seg["lines"][0]["text"])
+                letter, title = m.group(1), m.group(2).strip()
+                b.set_context(chapter=f"附录{letter} {title}", section=None)
+                nodes.append(b.appendix(letter, title, [bp], [seg["bbox"]]))
+                current = None
+                continue
+
             if kind == "clause":
-                num = L.CLAUSE_RE.match(seg["lines"][0]["text"]).group(1)
+                num = _clause_num(seg["lines"][0]["text"])
                 if current is not None and current["num"] == num:
                     # 条文被表格/插图打断后又续上同一个条号
                     _merge_continuation(current, bp, seg["bbox"], seg["text"])
@@ -265,7 +314,30 @@ class DocumentParser:
             nodes = self._assemble(els)   # 裁图在 _assemble 内完成，此时 pdf 仍打开
         nodes = link_structure(nodes)
         self._refine_formula_variables(nodes)
+        self._link_explanations(nodes)
         return nodes
+
+    @staticmethod
+    def _link_explanations(nodes: list[dict]) -> None:
+        """
+        条文说明 ↔ 正文条文双向关联。
+        说明区的条号与正文一一对应（实测覆盖率约 34%，其余条文没有官方说明），
+        这是"这条规定的依据是什么"唯一能回答的来源，必须连上。
+        """
+        by_id = {n["node_id"]: n for n in nodes}
+        clauses = {n["num"]: n for n in nodes if n["type"] == "clause"}
+        for n in nodes:
+            if n["type"] != "explanation":
+                continue
+            # 一条说明可能覆盖多条条文（"7.4.1~7.4.3" / "7.4.11、7.4.12"），
+            # 全都要连上——否则用户问被覆盖的那几条时查不到依据。
+            for num in (_explanation_targets(n["content"]) or [n["num"]]):
+                c = clauses.get(num)
+                if c is not None:
+                    if c["node_id"] not in n["explains"]:
+                        n["explains"].append(c["node_id"])
+                    if n["node_id"] not in c["explained_by"]:
+                        c["explained_by"].append(n["node_id"])
 
     def _refine_formula_variables(self, nodes: list[dict]) -> None:
         """
@@ -336,6 +408,43 @@ def _split_heading(text: str) -> tuple[str, str]:
     if m:
         return m.group(1), m.group(2).strip()
     return "", text.strip()
+
+
+def _clause_num(text: str) -> str:
+    """条文号：正文是 5.3.3，附录是 A.0.1，两种形态统一在这里取。"""
+    m = L.CLAUSE_RE.match(text)
+    if m:
+        return m.group(1)
+    m = L.APPENDIX_CLAUSE_RE.match(text)
+    if m:
+        return f"{m.group(1)}.{m.group(2)}.{m.group(3)}"
+    return ""
+
+
+_RANGE_RE = re.compile(r"(\d+\.\d+)\.(\d+)\s*[~～]\s*(?:\d+\.\d+\.)?(\d+)")
+
+
+def _explanation_targets(text: str) -> list[str]:
+    """
+    条文说明开头覆盖的条文号。
+    实测四种写法都要认：
+      "1.0.1 本条是…"         单条
+      "7.4.1~7.4.3 明确了…"    区间（需展开成 3 条）
+      "7.4.11、7.4.12 明确…"   列举
+      "5.1.2、5.1.3 给出了…"   列举
+    """
+    head = re.split(r"[。\n]", text, maxsplit=1)[0][:60]
+    nums: list[str] = []
+    for m in _RANGE_RE.finditer(head):      # 区间展开
+        sec, a, b = m.group(1), int(m.group(2)), int(m.group(3))
+        nums += [f"{sec}.{i}" for i in range(a, b + 1)]
+    nums += re.findall(r"\d+\.\d+\.\d+", head)
+    out, seen = [], set()
+    for n in nums:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
 
 
 def _split_items(seg: dict) -> list[tuple[str, list[dict]]]:

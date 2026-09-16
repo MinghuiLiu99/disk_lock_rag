@@ -24,6 +24,9 @@ TYPE_LEVEL = {
     "preamble": 0,
     "chapter": 1, "section": 2, "clause": 3, "item": 4,
     "table": 3, "figure": 3, "formula": 3, "explanation": 3,
+    # 附录与章同级。编号形态不同（附录 A / A.0.1），且引用时 target_type=appendix
+    # 需要能与 chapter 区分开，否则 refs 的 in_scope 判定会对不上。
+    "appendix": 1,
 }
 ALLOWED_TYPES = tuple(TYPE_LEVEL)
 
@@ -317,6 +320,11 @@ class NodeBuilder:
         return self._base("preamble", None, content, pages, bboxes,
                           auto_modality=False, refs=[], **kw)
 
+    def appendix(self, letter: str, title: str, pages, bboxes, **kw) -> dict:
+        """附录标题（附录 A / B / C / D），与章同级但类型独立，便于 refs 的 in_scope 判定。"""
+        return self._base("appendix", letter, f"附录{letter} {title}".strip(),
+                          pages, bboxes, auto_modality=False, refs=[], **kw)
+
 
 # --------------------------------------------------------------------- 校验
 
@@ -408,8 +416,15 @@ def link_structure(nodes: Sequence[dict]) -> list[dict]:
             continue
         lv = node["level"]
         stack = {k: v for k, v in stack.items() if k < lv}
-        node["parent_id"] = stack.get(lv - 1) if lv > 1 else None
-        if node["type"] in ("chapter", "section", "clause"):
+        # 取栈里"层级小于自己"的最近一个，而不是严格的 lv-1：
+        # 附录是 附录(1) → 条(3)，中间没有"节"这一层，严格按 lv-1 会挂不上父节点。
+        node["parent_id"] = None
+        for k in sorted(stack, reverse=True):
+            if k < lv:
+                node["parent_id"] = stack[k]
+                break
+        # appendix 与 chapter 同级，也要压栈，否则附录条文挂不到附录节点上
+        if node["type"] in ("chapter", "section", "clause", "appendix"):
             stack[lv] = node["node_id"]
         if node["type"] == "clause":
             last_clause = node["node_id"]

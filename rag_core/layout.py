@@ -20,11 +20,20 @@ PUA_SYMBOLS = {
 }
 
 # 行首条号 / 节号 / 表标题 / 图题 / 公式号 / 图注
-CLAUSE_RE = re.compile(r"^(\d+\.\d+\.\d+)\s*(?![）)、。；：，])")
+# 条号后面不能再跟数字——否则正则会回溯：把 "7.4.11" 读成 "7.4.1"
+CLAUSE_RE = re.compile(r"^(\d+\.\d+\.\d+)(?!\d)\s*(?![）)、。；：，])")
+# 条文说明区专用：说明常写成"7.4.11、7.4.12"（列举）或"7.4.1~7.4.3"（区间），
+# 标点跟在条号后，用正文那套严格规则会整行认不出来。
+NOTES_CLAUSE_RE = re.compile(r"^(\d+\.\d+\.\d+)(?!\d)")
 SECTION_RE = re.compile(r"^(\d+\.\d+)(?:\s+|(?=\S))([^\d].*)$")
 CHAPTER_RE = re.compile(r"^(\d+)\s+(\S.*)$")
 TABLE_TITLE_RE = re.compile(r"^(?:按)?表\s*([A-Z]?\.?\d+(?:\.\d+)*(?:-\d+)?)\s*(.*)$")
-FIGURE_TITLE_RE = re.compile(r"^图\s*(\d+(?:\.\d+)*(?:-\d+)?)\s+(.*)$")
+# 图题里编号与标题之间**可能没有空格**（实测：图1承插型…、图6.2.4可调托撑…、图6.3.5斜杆搭设示意图）。
+# 但正文里的交叉引用（"（图6.2.4）"）不会出现在行首，所以用行首锚定 + 排除紧跟标点即可。
+FIGURE_TITLE_RE = re.compile(r"^图\s*(\d+(?:\.\d+)*(?:-\d+)?)\s*(?![）)、。；：，])(\S.*)$")
+# 附录：标题 "附录 A 风压高度变化系数"，条文号 "A.0.1"
+APPENDIX_TITLE_RE = re.compile(r"^附\s*录\s*([A-Z])\s*(\S.*)$")
+APPENDIX_CLAUSE_RE = re.compile(r"^([A-Z])\.(\d+)\.(\d+)\s*(?![）)、。；：，])")
 EQNUM_RE = re.compile(r"[（(]\s*(\d+\.\d+\.\d+(?:-\d+)?)\s*[）)]")
 # 公式编号必须出现在行尾，才是公式本体；出现在行中说明只是引用
 EQNUM_TAIL_RE = re.compile(r"[（(]\s*\d+\.\d+\.\d+(?:-\d+)?\s*[）)]\s*$")
@@ -360,7 +369,11 @@ def merge_cross_page_tables(prev_page_tables: list[dict], cur_page_tables: list[
         return cur_page_tables
     a, b = last[-1], first[0]
     same_shape = abs(a["bbox"][0] - b["bbox"][0]) < 6 and abs(a["bbox"][2] - b["bbox"][2]) < 6
-    if not (same_shape and a["bbox"][3] > 720 and b["bbox"][1] < 120):
+    # 判据：上页表贴到页底 + 本页表顶在页首 + 横向对齐 **且本页这张表自己没有标题行**。
+    # 最后一条很关键：表 C.0.1 在 p36 结束、表 C.0.2 在 p37 另起且带自己的标题，
+    # 没有这条会被误并成一张 54 行的表。
+    if not (same_shape and a["bbox"][3] > 720 and b["bbox"][1] < 120
+            and not (b.get("title") or "").strip()):
         return cur_page_tables
     width = max(len(r) for r in b["cells"])
     header = [list(r) + [""] * (width - len(r)) for r in a["cells"] if any(x.strip() for x in r)]
@@ -380,11 +393,19 @@ def merge_cross_page_tables(prev_page_tables: list[dict], cur_page_tables: list[
 def graphic_clusters(page, gap: float = 14.0, min_w: float = 60.0,
                      min_h: float = 60.0) -> list[list[float]]:
     """
-    把矢量线条/曲线按邻近关系聚成图区。
-    本规范的图几乎全是矢量绘制，位图接口取不到，只能靠图元聚类。
+    把图元按邻近关系聚成图区。**三类都要收**：
+      · curves / lines —— 矢量绘制的图（本规范大部分图是这种）
+      · images        —— 位图绘制的图（实测第 47 页的图 3 就是位图，
+                         只收矢量会整张漏掉）
+    面积超过整页 80% 的图元视为页面背景，跳过。
     """
-    boxes = [[d["x0"], d["top"], d["x1"], d["bottom"]]
-             for d in list(page.curves) + list(page.lines)]
+    page_area = page.width * page.height
+    boxes = []
+    for d in list(page.curves) + list(page.lines) + list(page.images):
+        w, h = d["x1"] - d["x0"], d["bottom"] - d["top"]
+        if w <= 0 or h <= 0 or (w * h) > 0.8 * page_area:
+            continue
+        boxes.append([d["x0"], d["top"], d["x1"], d["bottom"]])
     clusters: list[list[float]] = []
     for box in sorted(boxes, key=lambda b: b[0]):
         for cl in clusters:

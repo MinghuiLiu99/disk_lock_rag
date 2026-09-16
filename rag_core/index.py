@@ -297,11 +297,13 @@ class RefGraph:
             if n["parent_id"] in self.nodes:
                 self.g.add_edge(n["parent_id"], n["node_id"], type="contains")
 
-    def neighbors(self, node_id: str, hops: int = 1, successors_only: bool = False) -> list[str]:
+    def neighbors(self, node_id: str, hops: int = 1, successors_only: bool = False,
+                  kinds: "set[str] | None" = None) -> list[str]:
         """
         successors_only=True 时只向下走（引用边 + 父子边）。
         闭包扩展必须这样——否则每条条文都会把它的"节""章"父节点拉进来，
         上下文预算全被目录型节点吃掉，对回答毫无帮助。
+        kinds 可限定只走某类边（如 {"contains"} 只走父子、排除 "contains" 只走引用）。
         """
         import networkx as nx
         if node_id not in self.g:
@@ -311,9 +313,15 @@ class RefGraph:
         for _ in range(hops):
             nxt = set()
             for n in frontier:
-                nxt |= set(self.g.successors(n))
+                for _, tgt, data in self.g.out_edges(n, data=True):
+                    if kinds and data.get("type") not in kinds:
+                        continue
+                    nxt.add(tgt)
                 if not successors_only:
-                    nxt |= set(self.g.predecessors(n))
+                    for src, _, data in self.g.in_edges(n, data=True):
+                        if kinds and data.get("type") not in kinds:
+                            continue
+                        nxt.add(src)
             nxt -= seen
             seen |= nxt
             frontier = nxt
@@ -327,6 +335,10 @@ class RefGraph:
 
 # 进向量库的类型：款(item) 的文本与所属条文重复，进向量只会挤占召回位，故排除
 VECTOR_TYPES = ("chapter", "section", "clause", "table", "figure", "formula")
+
+# 图里除 "contains"（父子）之外的所有边类型，即"引用型"边。
+# 闭包扩展要先走这一组：跨章依赖（5.3.3 → 附录C）才是闭包的价值所在。
+REF_KINDS = {"clause", "table", "figure", "formula", "appendix", "external_standard"}
 
 # 查询里的显式标识符：命中即直接加权。编号类查询靠向量必翻车（"5.4.2 说了什么"
 # 会被语义相近的 5.4.3 抢走），所以这一路必须是硬规则，不能交给相似度。
@@ -453,24 +465,40 @@ class HybridRetriever:
 
         if expand_hops:                      # 引用闭包扩展：把命中的表/图/公式/附录带回来
             have = {r["node_id"] for r in ranked}
-            extra = {}
-            budget = 6                       # 扩展上限：闭包要补充依据，不是把整章拖进来
-            for r in ranked:
-                # 节/章是枢纽节点，从它们扩展会把整节条文全拉进来，上下文瞬间被淹。
-                # 扩展只从"内容型"节点出发：条 / 款 / 表 / 图 / 公式。
-                if self.nodes[r["node_id"]]["type"] in ("section", "chapter"):
-                    continue
-                for nb in self.graph.neighbors(r["node_id"], hops=expand_hops,
-                                               successors_only=True):
-                    if nb in have:
-                        continue
-                    if self.nodes[nb]["type"] in ("section", "chapter"):
-                        continue
-                    extra.setdefault(nb, []).append(r["node_id"])
-                    if len(extra) >= budget:
+            extra: dict[str, list[str]] = {}
+            # 节/章是枢纽节点，从它们扩展会把整节条文全拉进来，上下文瞬间被淹。
+            # 只从"内容型"节点出发：条 / 款 / 表 / 图 / 公式。
+            seeds = [r["node_id"] for r in ranked
+                     if self.nodes[r["node_id"]]["type"] not in ("section", "chapter")]
+
+            def take(kinds, budget: int) -> None:
+                """
+                逐种子轮转取（每轮每个种子最多取 1 个），避免单个枢纽把预算吃光。
+                实测踩过：5.4.1 一条就带 4 款 + 3 公式 + 1 表，顺序取会把 6 个预算占满，
+                真正需要的附录 C（由 5.3.3 引用）反而拿不回来。
+                """
+                added = 0
+                while added < budget:
+                    progress = False
+                    for s in seeds:
+                        if added >= budget:
+                            break
+                        for nb in self.graph.neighbors(s, hops=expand_hops,
+                                                       successors_only=True, kinds=kinds):
+                            if nb in have or nb in extra:
+                                continue
+                            if self.nodes[nb]["type"] in ("section", "chapter"):
+                                continue
+                            extra[nb] = [s]
+                            added += 1
+                            progress = True
+                            break                      # 每个种子每轮只取一个
+                    if not progress:
                         break
-                if len(extra) >= budget:
-                    break
+
+            # 第一轮走**跨章引用**（闭包的价值所在），第二轮才补父子（子表/子公式/款）
+            take(REF_KINDS, 5)
+            take({"contains"}, 4)
             for nid, via in extra.items():
                 n = self.nodes[nid]
                 ranked.append({"node_id": nid, "type": n["type"], "num": n["num"],
