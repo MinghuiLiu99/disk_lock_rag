@@ -2,10 +2,13 @@
 """
 跑一遍解析器：PDF → 节点 + 裁图 + 抽检报告。
 
-    python run_parse.py --pdf "盘扣规范/jgj 231-2021.pdf" --offset 0 \
+    python run_parse.py --pdf "规范/jgj 231-2021.pdf" --offset 0 \
         --standard-id JGJ231 --standard-code "JGJ/T 231-2021" \
         --standard-name "建筑施工承插型盘扣式钢管脚手架安全技术标准" \
-        --doc-id jgj231_2021_main --out out_full
+        --doc-id jgj231_2021_main --out output/JGJ_T_231-2021
+
+产物形态：<out>/nodes.jsonl + <out>/check_report.md + <out>/figures/
+每本规范一个目录，路径由 --out 决定，解析器本身不关心是哪一本。
 """
 from __future__ import annotations
 
@@ -103,8 +106,9 @@ def render_report(nodes: list[dict], check: dict) -> str:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--pdf", default="盘扣规范/jgj 231-2021.pdf")
-    ap.add_argument("--out", default="out_full")
+    ap.add_argument("--pdf", default="规范/jgj 231-2021.pdf")
+    ap.add_argument("--out", default="output/JGJ_T_231-2021",
+                    help="产物目录：nodes.jsonl / check_report.md / figures 都写在里面")
     ap.add_argument("--standard-id", default="JGJ231")
     ap.add_argument("--standard-code", default="JGJ/T 231-2021")
     ap.add_argument("--standard-name", default="建筑施工承插型盘扣式钢管脚手架安全技术标准",

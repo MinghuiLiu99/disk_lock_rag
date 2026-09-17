@@ -6,6 +6,14 @@
 第 2 轮改用 filter=title_and_abstract.search: 做标题+摘要级精确匹配，并限定 2023 年以后。
 
 数据源：OpenAlex、arXiv（CS 预印本）、Crossref
+
+用途：写论文的 related work / 研究空白论证。跑一次就能拿到"这个方向有没有人做、
+做到什么程度"的可复现证据，比手写一段"相关研究较少"要硬得多。
+
+    python run_lit_check.py
+
+OpenAlex 不需要任何配置。arXiv 那几组查询依赖本机的 paper-lookup skill 里的
+Atom→JSON 小工具；找不到时只跳过 arXiv，OpenAlex 部分照常输出。
 """
 import json
 import subprocess
@@ -13,9 +21,10 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 MAILTO = "lit-check@example.org"
-ARXIV_PARSER = r"C:\Users\Aixko\.codex\skills\paper-lookup\scripts\arxiv_atom.py"
+ARXIV_PARSER = Path(r"C:\Users\Aixko\.codex\skills\paper-lookup\scripts\arxiv_atom.py")
 UA = {"User-Agent": "lit-check/1.0 (mailto:lit-check@example.org)"}
 SELECT = "id,doi,title,publication_year,cited_by_count,primary_location,type"
 
@@ -44,6 +53,8 @@ def openalex(q, n=8, since="2023-01-01"):
 
 
 def arxiv(q, n=10):
+    if not ARXIV_PARSER.exists():
+        raise RuntimeError(f"缺少 arXiv 解析脚本 {ARXIV_PARSER}——跳过 arXiv，OpenAlex 不受影响")
     url = ("https://export.arxiv.org/api/query?search_query=" + urllib.parse.quote(q)
            + f"&start=0&max_results={n}&sortBy=relevance")
     xml = get(url, timeout=60)

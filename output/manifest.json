@@ -1,0 +1,81 @@
+{
+  "_comment": "知识库清单：标准号 ↔ 中文全名映射，以及每本规范的产物路径与规模。目录与文件名统一用标准号（ASCII、可排序、唯一），中文全名只在节点字段和这份清单里出现。新增规范 = 在 standards 里加一条，并在 output/ 下新建一个同名目录。",
+  "version": 1,
+  "updated_at": "2026-09-17",
+  "standards": [
+    {
+      "standard_id": "JGJ231",
+      "standard_code": "JGJ/T 231-2021",
+      "standard_name": "建筑施工承插型盘扣式钢管脚手架安全技术标准",
+      "version": "2021",
+      "doc_id": "jgj231_2021_main",
+      "dir": "output/JGJ_T_231-2021",
+      "nodes": "output/JGJ_T_231-2021/nodes.jsonl",
+      "check_report": "output/JGJ_T_231-2021/check_report.md",
+      "figures": "output/JGJ_T_231-2021/figures",
+      "index": "output/index/JGJ_T_231-2021",
+      "source_pdf": "规范/jgj 231-2021.pdf",
+      "page_offset": 0,
+      "parsed_at": "2026-09-17",
+      "node_count": 381,
+      "figure_count": 13,
+      "type_counts": {
+        "chapter": 9,
+        "section": 19,
+        "clause": 153,
+        "item": 91,
+        "table": 20,
+        "figure": 13,
+        "formula": 22,
+        "appendix": 4,
+        "explanation": 50
+      }
+    },
+    {
+      "standard_id": "DB11T2100",
+      "standard_code": "DB11/T 2100-2023",
+      "standard_name": "承插型盘扣式钢管脚手架安全选用技术规程",
+      "version": "2023",
+      "doc_id": "db11t2100_2023",
+      "dir": "output/DB11_T_2100-2023",
+      "nodes": "output/DB11_T_2100-2023/nodes.jsonl",
+      "check_report": "output/DB11_T_2100-2023/check_report.md",
+      "figures": "output/DB11_T_2100-2023/figures",
+      "index": "output/index/DB11_T_2100-2023",
+      "source_pdf": "规范/DB11T 2100-2023.pdf",
+      "page_offset": 0,
+      "parsed_at": "2026-09-17",
+      "node_count": 422,
+      "figure_count": 22,
+      "type_counts": {
+        "preamble": 11,
+        "chapter": 10,
+        "section": 12,
+        "clause": 159,
+        "item": 105,
+        "table": 22,
+        "figure": 22,
+        "appendix": 3,
+        "explanation": 78
+      },
+      "note": "本规范无编号公式（0 个 formula 节点），全部改为选型表；与 JGJ/T 231 的对比见 README"
+    }
+  ],
+  "mixed_profile": {
+    "_comment": "混库只在索引与查询期发生：nodes 仍是各自独立的文件，从不合并落盘",
+    "index": "output/index/mixed",
+    "nodes": [
+      "output/JGJ_T_231-2021/nodes.jsonl",
+      "output/DB11_T_2100-2023/nodes.jsonl"
+    ]
+  },
+  "pending": [
+    {
+      "standard_code": "GB 55037-2022",
+      "standard_name": "建筑防火通用规范",
+      "source_pdf": "规范/GB 55037-2022.pdf",
+      "status": "raw",
+      "note": "已收入规范目录，尚未解析"
+    }
+  ]
+}

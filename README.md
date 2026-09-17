@@ -160,15 +160,15 @@ pip install pdfplumber pypdfium2 pillow numpy networkx fastapi uvicorn
 
 ```bash
 # 1) 解析 PDF → 节点 + 抽检报告
-python run_parse.py --pdf "盘扣规范/jgj 231-2021.pdf" --offset 0 \
+python run_parse.py --pdf "规范/jgj 231-2021.pdf" --offset 0 \
                     --standard-id JGJ231 --standard-code "JGJ/T 231-2021" \
                     --standard-name "建筑施工承插型盘扣式钢管脚手架安全技术标准" \
-                    --version 2021 --doc-id jgj231_2021_main --out out_full
+                    --version 2021 --doc-id jgj231_2021_main --out output/JGJ_T_231-2021
 # 换第二本规范：只改这几个参数（standard-id 必须改，否则节点 id 会和上一本撞）
-python run_parse.py --pdf "盘扣规范/DB11T 2100-2023.pdf" --offset 0 \
+python run_parse.py --pdf "规范/DB11T 2100-2023.pdf" --offset 0 \
                     --standard-id DB11T2100 --standard-code "DB11/T 2100-2023" \
                     --standard-name "承插型盘扣式钢管脚手架安全选用技术规程" \
-                    --version 2023 --doc-id db11t2100_2023 --out out_db11
+                    --version 2023 --doc-id db11t2100_2023 --out output/DB11_T_2100-2023
 
 # 2) 建索引 + 跑检索验收（会打印 BM25 / 向量 / 混合 三路对比）
 python run_index.py
@@ -180,32 +180,34 @@ python app.py --profile mixed             # 两本规范混库（答案自动带
 ```
 
 四个 profile 可以随时切换，页面的标题、节点数、示例问题会跟着变。
-也可以指向任意数据：`python app.py --nodes out_full/nodes.jsonl --pdf "盘扣规范/jgj 231-2021.pdf" --offset 0`
+也可以指向任意数据：`python app.py --nodes output/JGJ_T_231-2021/nodes.jsonl --pdf "规范/jgj 231-2021.pdf" --offset 0`
 
 > `--offset` 是「文件第 1 页对应的原书页码 − 1」。整本规范通常传 0（PDF 第 1 页就是书上第 1 页）。
 > 页面上的原文高亮按这个偏移把节点坐标映射回 PDF 页。
+> `--out` 决定这一本规范的全部产物落在哪个目录：`nodes.jsonl` + `check_report.md` + `figures/` 一起写在里面。
 
 ### 在 notebook 里调用
 
 ```python
 from rag_core import DocumentParser, validate_all, summary, to_jsonl, from_jsonl
 
-parser = DocumentParser("盘扣规范/jgj 231-2021.pdf", "JGJ231", "JGJ/T 231-2021",
+parser = DocumentParser("规范/jgj 231-2021.pdf", "JGJ231", "JGJ/T 231-2021",
                         "jgj231_2021_main", "2021",
                         standard_name="建筑施工承插型盘扣式钢管脚手架安全技术标准",
                         page_offset=0,            # PDF 第 1 页 = 书上第 1 页
-                        figure_dir="out_full/figures")
+                        figure_dir="output/JGJ_T_231-2021/figures")
 nodes = parser.parse()
 summary(nodes)          # 类型分布 / 待复核清单 / 引用边统计
 validate_all(nodes)     # 字段与坐标校验
-to_jsonl(nodes, "out_full/nodes.jsonl")
+to_jsonl(nodes, "output/JGJ_T_231-2021/nodes.jsonl")
 ```
 
 ```python
 from rag_core.index import Embedder, build_index
 from rag_core.generate import Answerer
 
-bundle = build_index(from_jsonl("out_full/nodes.jsonl"), "out_full/index")
+bundle = build_index(from_jsonl("output/JGJ_T_231-2021/nodes.jsonl"),
+                     "output/index/JGJ_T_231-2021")
 print(Answerer(bundle).answer("立杆稳定性应该怎么验算")["answer"])
 ```
 
@@ -214,34 +216,49 @@ print(Answerer(bundle).answer("立杆稳定性应该怎么验算")["answer"])
 ## 五、目录结构
 
 ```
-rag_core/
-  schema.py      字段规范 v1.2：27 字段 / 10 种 type / 6 种引用类型 / 13 种待复核原因
-  layout.py      版面层：符号修复、行重建、表格还原、表头扁平化、图区定位、裁图
-  parser.py      主解析器：条文切分、跨页续接、同号合并、款/项、公式与变量表
-  index.py       索引层：混合分词、BM25、向量、表格库、引用图、混合检索、同义词扩展
-  generate.py    生成层：上下文组装、引用约束生成、引用三分类回查、拒答
-
-run_parse.py     解析入口（产出 nodes.jsonl + 抽检报告，支持 --pdf/--out/--offset）
-run_index.py     建索引 + 检索验收（BM25 / 向量 / 混合 三路对比）
-app.py           FastAPI 服务：SSE 流式问答 / PDF 页面高亮渲染 / 四个 profile 切换
-web/index.html   单页前端（标题、节点数、示例问题由服务端注入）
-
-out_full/
-  nodes.jsonl        JGJ/T 231-2021 的结构化节点（381 个）
-  check_report.md    抽检报告（原表 / 扁平版 / ASCII 网格三段对照）
-  figures/           13 张裁切图
-out_db11/
-  nodes.jsonl        DB11/T 2100-2023 的结构化节点（422 个）
-  check_report.md    抽检报告
-  figures/           22 张裁切图
-
-poc/
-  poc_extract.py     早期可行性验证（前 12 类排印陷阱的发现过程）
-  search_lit.py      学术文献核查（OpenAlex / Crossref / arXiv）
+rag_project/
+├─ app.py              FastAPI 服务：SSE 流式问答 / PDF 页面高亮渲染 / 三个 profile 切换
+├─ run_parse.py        解析入口（PDF → nodes.jsonl + 抽检报告 + 裁图）
+├─ run_index.py        建索引 + 检索验收（BM25 / 向量 / 混合 三路对比）
+├─ run_lit_check.py    学术文献核查（OpenAlex / arXiv），写论文论证研究空白用
+├─ rag_core/           核心库
+│    schema.py         字段规范 v1.2：27 字段 / 10 种 type / 6 种引用类型 / 13 种待复核原因
+│    layout.py         版面层：符号修复、行重建、表格还原、表头扁平化、图区定位、裁图
+│    parser.py         主解析器：条文切分、跨页续接、同号合并、款/项、公式与变量表
+│    tables.py         附表工具化：查值表 / 选型表的分类与查询
+│    index.py          索引层：混合分词、BM25、向量、表格库、引用图、混合检索、同义词扩展
+│    generate.py       生成层：上下文组装、引用约束生成、引用三分类回查、拒答
+├─ web/index.html      单页前端（标题、节点数、示例问题由服务端注入）
+├─ eval/               评测脚本（出题 + 答案回查校验 + 后续的召回率/正确率统计）
+├─ 规范/               规范 PDF 原件（受著作权保护，不入库）
+└─ output/             ★ 核心资产：每本规范一个目录，产物永远不混
+   ├─ manifest.json            标准号 ↔ 中文全名映射 + 每本的规模与解析时间
+   ├─ JGJ_T_231-2021/
+   │    nodes.jsonl             JGJ/T 231-2021 的结构化节点（381 个）
+   │    check_report.md         抽检报告（原表 / 扁平版 / ASCII 网格三段对照）
+   │    figures/                13 张裁切图
+   ├─ DB11_T_2100-2023/
+   │    nodes.jsonl             DB11/T 2100-2023 的结构化节点（422 个）
+   │    check_report.md
+   │    figures/                22 张裁切图
+   └─ index/                   索引缓存（可重建，不入库）
+        JGJ_T_231-2021/  DB11_T_2100-2023/  mixed/
 ```
 
-> `out/index/` 与 `out_full/index/` 是索引产物（含 5MB 级向量缓存），已加入 `.gitignore`，可由 `nodes.jsonl` 重建。
-> 规范 PDF 与含 API key 的脚本同样不入库。
+### 为什么按规范分目录，而不是按文件类型分
+
+`nodes.jsonl`、`check_report.md`、`figures/` 是同一次解析的三个产物，一起生成、一起失效、一起重跑。
+按规范分目录以后，"删掉一本规范"就是删一个目录，不会在三个地方各留一点孤儿文件；新增规范也只是新增一个目录，
+不动任何已有文件。索引缓存 `output/index/` 反过来放在顶层——它跨越规范（`mixed` 要同时索引两本），
+而且可删可重建，跟核心资产物理分开。
+
+文件名统一用标准号（`JGJ_T_231-2021`）而不是中文全名：全名两本都以"承插型盘扣式钢管脚手架"开头，
+肉眼区分度低、不能区分版本、命令行要加引号；而标准号 ASCII、可排序、全局唯一。
+中文全名存在两个地方——`output/manifest.json` 和每个节点的 `standard_name` 字段。
+目录内部的文件名固定为 `nodes.jsonl` / `check_report.md`，规范身份由目录承担，少一类命名对不上的出错可能。
+
+> `output/index/` 已加入 `.gitignore`（单本向量缓存约 5MB，混库约 10MB），可由 `nodes.jsonl` 重建。
+> 规范 PDF 同样不入库。
 
 ---
 

@@ -30,8 +30,9 @@ ROOT = Path(__file__).resolve().parent
 
 # 可切换的数据源
 PROFILES = {
-    "full": {"nodes": "out_full/nodes.jsonl", "index": "out_full/index",
-             "pdfs": {"JGJ231": ("盘扣规范/jgj 231-2021.pdf", 0)},
+    "full": {"nodes": "output/JGJ_T_231-2021/nodes.jsonl",
+             "index": "output/index/JGJ_T_231-2021",
+             "pdfs": {"JGJ231": ("规范/jgj 231-2021.pdf", 0)},
              "title": "JGJ/T 231-2021《全本 57 页》",
              "examples": ["插销安装后下沉量不应大于多少",
                           "扫地杆距可调底座底板不应大于多少",
@@ -43,8 +44,9 @@ PROFILES = {
                           "拆除脚手架时应注意哪些安全要求",
                           "2步3跨布置时双排架的计算长度系数",
                           "盘扣架立杆的颜色有什么要求"]},
-    "db11": {"nodes": "out_db11/nodes.jsonl", "index": "out_db11/index",
-             "pdfs": {"DB11T2100": ("盘扣规范/DB11T 2100-2023.pdf", 0)},
+    "db11": {"nodes": "output/DB11_T_2100-2023/nodes.jsonl",
+             "index": "output/index/DB11_T_2100-2023",
+             "pdfs": {"DB11T2100": ("规范/DB11T 2100-2023.pdf", 0)},
              "title": "DB11/T 2100-2023《全本 75 页》",
              "examples": ["脚手架的步距不应超过多少",
                           "可调托撑伸出顶层水平杆的悬臂长度不应超过多少",
@@ -52,21 +54,25 @@ PROFILES = {
                           "钢管外径和壁厚的允许偏差是多少",
                           "斜杆搭设有什么要求"]},
     # 混库：两本规范进同一个索引。答案会自动带上标准号，冲突时分别列出。
-    "mixed": {"nodes": ["out_full/nodes.jsonl", "out_db11/nodes.jsonl"],
-              "index": "out_mixed/index",
-              "pdfs": {"JGJ231": ("盘扣规范/jgj 231-2021.pdf", 0),
-                       "DB11T2100": ("盘扣规范/DB11T 2100-2023.pdf", 0)},
-              "title": "两本规范混库（JGJ/T 231-2021 + DB11/T 2100-2023）",
-              "examples": ["可调托撑伸出顶层水平杆的悬臂长度不应超过多少",
-                           "脚手架的步距不应超过多少",
-                           "立杆稳定性应该怎么验算",
-                           "插销安装后下沉量不应大于多少",
-                           "脚手架的搭设高度有什么限制"]},
+    # nodes 是一个列表：每本规范仍以独立文件存放，只在索引/查询期合并——
+    # 合并成一份会破坏 node_id 前缀与 refs 的对应关系，详见 README 第四节。
+    "mixed": {"nodes": ["output/JGJ_T_231-2021/nodes.jsonl",
+                        "output/DB11_T_2100-2023/nodes.jsonl"],
+              "index": "output/index/mixed",
+              "pdfs": {"JGJ231": ("规范/jgj 231-2021.pdf", 0),
+                       "DB11T2100": ("规范/DB11T 2100-2023.pdf", 0)},
+             "title": "两本规范混库（JGJ/T 231-2021 + DB11/T 2100-2023）",
+             "examples": ["可调托撑伸出顶层水平杆的悬臂长度不应超过多少",
+                          "脚手架的步距不应超过多少",
+                          "立杆稳定性应该怎么验算",
+                          "插销安装后下沉量不应大于多少",
+                          "脚手架的搭设高度有什么限制"]},
 }
 
 # 运行时配置（由 main 按 profile 填充）
-CFG = {"nodes": [ROOT / "out_full/nodes.jsonl"], "index": ROOT / "out_full/index",
-       "pdfs": {"JGJ231": (ROOT / "盘扣规范/jgj 231-2021.pdf", 0)},
+CFG = {"nodes": [ROOT / "output/JGJ_T_231-2021/nodes.jsonl"],
+       "index": ROOT / "output/index/JGJ_T_231-2021",
+       "pdfs": {"JGJ231": (ROOT / "规范/jgj 231-2021.pdf", 0)},
        "title": PROFILES["full"]["title"], "examples": PROFILES["full"]["examples"]}
 
 STATE: dict = {}

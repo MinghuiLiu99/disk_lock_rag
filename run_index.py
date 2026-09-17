@@ -2,8 +2,10 @@
 """
 构建索引并跑检索验收。
 
-    python run_index.py                 # 用 LM Studio 的 bge-m3
+    python run_index.py                 # 默认给 JGJ/T 231 建索引，用 LM Studio 的 bge-m3
     python run_index.py --hash-embed    # 不依赖本地模型，验证管道
+    python run_index.py --nodes output/JGJ_T_231-2021/nodes.jsonl output/DB11_T_2100-2023/nodes.jsonl \
+                        --out output/index/mixed      # 混库：多个节点文件合并进同一个索引
 """
 from __future__ import annotations
 
@@ -50,12 +52,13 @@ def show(title: str, bundle, query: str, top_k: int = 3) -> None:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--nodes", default="out/nodes.jsonl")
-    ap.add_argument("--out", default="out/index")
+    ap.add_argument("--nodes", nargs="+", default=["output/JGJ_T_231-2021/nodes.jsonl"],
+                    help="节点文件，可传多个（混库）：--nodes a.jsonl b.jsonl")
+    ap.add_argument("--out", default="output/index/JGJ_T_231-2021")
     ap.add_argument("--hash-embed", action="store_true")
     args = ap.parse_args()
 
-    nodes = from_jsonl(args.nodes)
+    nodes = [n for p in args.nodes for n in from_jsonl(p)]
     print(f"载入 {len(nodes)} 个节点")
     if args.hash_embed:
         embedder = HashingEmbedder()
