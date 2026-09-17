@@ -19,7 +19,10 @@ from .tables import TableTools
 
 # 答案里出现的引用形态（与 schema.extract_refs 保持一致）
 CITE_PATTERNS = (
-    ("clause", re.compile(r"第\s*(\d+(?:\.\d+){1,2})\s*条")),
+    # 条号。负向后顾排除"条文说明第4.4.4条"——那是说明节点、不是条文节点，
+    # 被抢过来会拿 (clause, 4.4.4) 去回查，而材料里只有 explanation 节点，
+    # 结果把一条**正确的**引用误判成幻觉。
+    ("clause", re.compile(r"(?<!说明)第\s*(\d+(?:\.\d+){1,2})\s*条")),
     ("table", re.compile(r"表\s*([A-Z]?\.?\d+(?:\.\d+)*(?:-\d+)?)")),
     ("figure", re.compile(r"图\s*(\d+(?:\.\d+)*(?:-\d+)?)")),
     ("formula", re.compile(r"式\s*[（(]\s*([\d.]+(?:-\d+)?)\s*[）)]")),
@@ -34,6 +37,11 @@ CITE_PATTERNS = (
     # 两个负向断言把"附录D.0.1"这类带条号的写法排除在外：(?!\s*[A-Z]) 挡"附录DD"，
     # (?!\.\d) 挡"附录D.0.1"。
     ("appendix", re.compile(r"附录\s*([A-Z])(?!\s*[A-Z])(?!\.\d)")),
+    # 条文说明。材料块的标签就是"条文说明 4.4.4"，模型会照这个形态抄。
+    # 缺这条规则会造成两种坏结果：写成"条文说明 4.4.4"时引用**完全静默**
+    # （不算有效也不算幻觉），写成"条文说明第4.4.4条"时被 clause 规则抢走、
+    # 误判成幻觉。两种都测过。
+    ("explanation", re.compile(r"条文说明\s*第?\s*(\d+(?:\.\d+){1,2})\s*条?")),
 )
 REFUSAL_MARKERS = ("未规定", "未涉及", "没有规定", "无法回答", "材料中未", "本章未")
 
@@ -65,10 +73,16 @@ def _title_overlap(title: str, question: str) -> int:
 
     return len(grams(title) & grams(question))
 
-def build_system_prompt(standards: Sequence[dict], multi: bool) -> str:
+def build_system_prompt(standards: Sequence[dict], multi: bool,
+                        detail: str = "rich") -> str:
     """
     系统提示词按知识库里的规范动态生成。
     单规范时引用只写条号；多规范时必须带标准号——否则"第5.1.2条"指哪一本说不清。
+
+    detail 控制答案篇幅：
+      "brief" —— 250 字以内、只给结论（首字和总时延都短）
+      "rich"  —— 充分展开，带上适用条件与例外（默认）
+    篇幅和 max_tokens 必须一起调，只改一边会出现"还没说完就被截断"。
     """
     names = "；".join(f"《{s['name']}》{s['code']}" for s in standards) or "（空）"
     cite_rule = (
@@ -78,23 +92,28 @@ def build_system_prompt(standards: Sequence[dict], multi: bool) -> str:
         if multi else
         "格式严格写成：[来源：第5.3.3条] 或 [来源：表5.1.9] 或 [来源：图5.1.4] 或 [来源：式（5.3.3-1）]"
     )
-    conflict_rule = (
-        "8. 若不同标准对同一问题规定不一致，必须分别列出并说明各自出处，不要合并成一个结论\n"
-        if multi else ""
+    rules = [
+        f"1. 每个结论后面必须标注来源，{cite_rule}",
+        '2. 材料中没有的内容，直接回答"提供的材料中未规定"，不要编造',
+        "3. 涉及数值、公式、表格取值时原样引用，不要换算、不要四舍五入",
+        "4. 用书面语分点陈述，不要大段照抄材料原文",
+    ]
+    rules += (
+        ["5. 回答控制在 250 字以内，分点不超过 6 条",
+         "6. 不要展开分析过程，直接给结论"]
+        if detail == "brief" else
+        ["5. 回答要充分展开，篇幅 500~1200 字：先给结论，再说明适用条件、边界与例外",
+         "6. 材料里有多条相关规定的，逐条列出并分别标注来源，不要合并成一句话"]
     )
-    return f"""你是工程建设标准的检索助手。
-本知识库包含：{names}
-只依据【材料】回答，禁止使用材料之外的任何知识，禁止推测。
-
-规则：
-1. 每个结论后面必须标注来源，{cite_rule}
-2. 材料中没有的内容，直接回答"提供的材料中未规定"，不要编造
-3. 涉及数值、公式、表格取值时原样引用，不要换算、不要四舍五入
-4. 回答用简洁的书面语，分点陈述；不要大段重复材料原文
-5. 回答控制在 250 字以内，分点不超过 6 条
-6. 不要展开分析过程，直接给结论
-7. 若材料里出现"用词：严禁/必须/应/宜/可"，引用时要保留该用词，不要把"宜"说成"应"
-{conflict_rule}"""
+    if multi:
+        rules.append("7. 不同标准对同一问题规定不一致时，必须分别列出并说明各自出处，"
+                     "不要合并成一个结论，也不要替读者取舍")
+    rules.append(f"{len(rules) + 1}. 若材料里出现\"用词：严禁/必须/应/宜/可\"，"
+                 "引用时要保留该用词，不要把\"宜\"说成\"应\"")
+    return ("你是工程建设标准的检索助手。\n"
+            f"本知识库包含：{names}\n"
+            "只依据【材料】回答，禁止使用材料之外的任何知识，禁止推测。\n\n"
+            "规则：\n" + "\n".join(rules))
 
 
 def _label(node: dict) -> str:
@@ -212,13 +231,20 @@ class Answerer:
 
     def __init__(self, bundle, llm_base: str = "http://localhost:1234/v1",
                  model: str = "qwen3.8-27b-uncensored-hauhaucs-aggressive-mtp",
-                 temperature: float = 0.1, timeout: int = 900, max_tokens: int = 1200,
-                 reasoning_effort: str = "none"):
+                 temperature: float = 0.1, timeout: int = 900, max_tokens: "int | None" = None,
+                 reasoning_effort: str = "none", detail: str = "rich"):
         self.bundle = bundle
         self.llm_base = llm_base.rstrip("/")
         self.model = model
         self.temperature = temperature
         self.timeout = timeout
+        # 篇幅与 token 预算必须配套。中文约 1.5 token/字，"rich" 模式正文上限
+        # 1200 字 ≈ 1800 token，给到 2500 留余量；"brief" 沿用原来的 1200。
+        # ⚠ 本地 27B 实测约 15 token/s，跑满 2500 上限约 2.5 分钟——
+        #   输出越丰富，等待越久，这是本地部署绕不开的代价。
+        self.detail = detail
+        if max_tokens is None:
+            max_tokens = 1200 if detail == "brief" else 2500
         self.max_tokens = max_tokens
         # 这两个本地模型默认"永远思考"：先把 token 预算烧在 reasoning_content 上，
         # 预算不够就只思考不出正文（空答案），且首字要等 15~26 秒。
@@ -232,11 +258,18 @@ class Answerer:
              for n in bundle.nodes},
             key=lambda x: x[1] or "")
         self.multi_standard = len(self.standards) > 1
-        self.system_prompt = build_system_prompt(
-            [{"id": s[0], "code": s[1], "name": s[2]} for s in self.standards],
-            self.multi_standard)
+        self._prompts: dict[str, str] = {}
+        self.system_prompt = self._prompt_for(detail)
         # 附表工具：查值表（稳定系数/风压系数/构配件规格…）的运行时查询入口
         self.table_tools = TableTools.from_nodes(bundle.nodes)
+
+    def _prompt_for(self, detail: str) -> str:
+        """按篇幅档位取系统提示词（缓存，避免每次请求重建）。"""
+        if detail not in self._prompts:
+            self._prompts[detail] = build_system_prompt(
+                [{"id": s[0], "code": s[1], "name": s[2]} for s in self.standards],
+                self.multi_standard, detail)
+        return self._prompts[detail]
 
     # ---------------------------------------------------------- 附表查值
     @staticmethod
@@ -472,7 +505,8 @@ class Answerer:
                     yield "content", delta["content"]
 
     def prepare(self, question: str, top_k: int = 6, expand_hops: int = 1,
-                alpha: float = 0.5, max_blocks: int = 10) -> dict:
+                alpha: float = 0.5, max_blocks: int = 10,
+                detail: "str | None" = None) -> dict:
         """先做检索与上下文组装（快），把 messages 交给生成阶段（慢）。"""
         hits = self.bundle.retriever.search(question, top_k=top_k, alpha=alpha,
                                             expand_hops=expand_hops)
@@ -485,9 +519,10 @@ class Answerer:
         return {
             "question": question,
             "messages": [
-                {"role": "system", "content": self.system_prompt},
+                {"role": "system", "content": self._prompt_for(detail or self.detail)},
                 {"role": "user", "content": f"【材料】\n{material}\n\n【问题】\n{question}"},
             ],
+            "detail": detail or self.detail,
             "standards": [{"code": s[1], "name": s[2]} for s in self.standards],
             "contexts": contexts,
             "table_rows": self.bundle.tables.find_rows(question, top_k=3),
@@ -578,7 +613,8 @@ class Answerer:
 
     # ---------------------------------------------------------- 入口
     def answer(self, question: str, top_k: int = 6, expand_hops: int = 1,
-               alpha: float = 0.5, max_blocks: int = 10) -> dict:
+               alpha: float = 0.5, max_blocks: int = 10,
+               detail: "str | None" = None) -> dict:
         prepared = self.prepare(question, top_k=top_k, expand_hops=expand_hops,
-                                alpha=alpha, max_blocks=max_blocks)
+                                alpha=alpha, max_blocks=max_blocks, detail=detail)
         return self.finalize(prepared, self._chat(prepared["messages"]))

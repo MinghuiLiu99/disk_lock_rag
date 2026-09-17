@@ -213,7 +213,8 @@ async def ask(payload: dict):
     # 本地 27B 要先吞完所有材料才吐第一个字。
     prepared = ans.prepare(question,
                            top_k=int((payload or {}).get("top_k", 10)),
-                           max_blocks=int((payload or {}).get("max_blocks", 10)))
+                           max_blocks=int((payload or {}).get("max_blocks", 10)),
+                           detail=(payload or {}).get("detail") or None)
 
     def sse(event: str, data: dict) -> str:
         return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"

@@ -66,7 +66,12 @@
           <option value="15">15 块</option>
           <option value="20">20 块</option>
         </select>
-        <span class="muted">实测首字几乎不受影响（6块 2.4s / 20块 4.2s），材料多则闭包带回的公式附表更全</span>
+        <span>篇幅</span>
+        <select id="detail">
+          <option value="brief">简短（250 字内，快）</option>
+          <option value="rich" selected>详细（500~1200 字）</option>
+        </select>
+        <span class="muted">首字几乎不受块数影响（6块 2.4s / 20块 4.2s）；篇幅越长总耗时越久（本地模型约 15 token/s）</span>
       </div>
       <div class="examples" id="ex"></div>
     </div>
@@ -208,7 +213,8 @@ async function ask(){
   try{
     const res = await fetch("/api/ask", {
       method:"POST", headers:{"Content-Type":"application/json"},
-      body: JSON.stringify({question:q, max_blocks: parseInt($("#blocks").value, 10)})
+      body: JSON.stringify({question:q, max_blocks: parseInt($("#blocks").value, 10),
+                            detail: $("#detail").value})
     });
     const reader = res.body.getReader();
     const dec = new TextDecoder();
