@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-跑一遍解析器：测试件 → 节点 + 裁图 + 抽检报告。
+跑一遍解析器：PDF → 节点 + 裁图 + 抽检报告。
 
-    python run_parse.py                # 解析测试件
-    python run_parse.py --pdf 盘扣规范/jgj 231-2021.pdf --offset 0 --doc jgj231_2021_main
+    python run_parse.py --pdf "盘扣规范/jgj 231-2021.pdf" --offset 0 \
+        --standard-id JGJ231 --standard-code "JGJ/T 231-2021" \
+        --standard-name "建筑施工承插型盘扣式钢管脚手架安全技术标准" \
+        --doc-id jgj231_2021_main --out out_full
 """
 from __future__ import annotations
 
@@ -101,16 +103,16 @@ def render_report(nodes: list[dict], check: dict) -> str:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--pdf", default="jgj 231-2021_test.pdf")
-    ap.add_argument("--out", default="out")
+    ap.add_argument("--pdf", default="盘扣规范/jgj 231-2021.pdf")
+    ap.add_argument("--out", default="out_full")
     ap.add_argument("--standard-id", default="JGJ231")
     ap.add_argument("--standard-code", default="JGJ/T 231-2021")
     ap.add_argument("--standard-name", default="建筑施工承插型盘扣式钢管脚手架安全技术标准",
                     help="规范中文全称，用于答案与前端展示「依据哪本规范」")
-    ap.add_argument("--doc-id", default="jgj231_2021_ch5_test")
+    ap.add_argument("--doc-id", default="jgj231_2021_main")
     ap.add_argument("--version", default="2021")
-    ap.add_argument("--offset", type=int, default=12,
-                    help="文件第 1 页对应的原书页码偏移（测试件首页码为 13 → 12）")
+    ap.add_argument("--offset", type=int, default=0,
+                    help="文件第 1 页对应的原书页码 − 1（整本规范通常为 0）")
     args = ap.parse_args()
 
     out_dir = Path(args.out)

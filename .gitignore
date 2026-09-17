@@ -30,6 +30,5 @@ out_mixed/
 # ---- 以下内容不入库，需本地自备 ----
 # 规范原文（受著作权保护，不适合推送到远端）
 盘扣规范/
-jgj 231-2021_test.pdf
 # 含硬编码的 RAGFlow API key，改用环境变量后再说
 ragflow_output.py

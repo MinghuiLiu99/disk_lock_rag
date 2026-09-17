@@ -4,21 +4,21 @@
 
 与"把 PDF 丢给通用解析器再向量检索"的做法不同，本项目把规范中的**条文、表格、公式、图**当作四类异构单元分别处理，并利用规范内部**显式可溯源的引用关系**做闭包扩展，让答案既准确又能给出法源。
 
-> **当前状态：两本规范均已跑通**，同一套解析器，只改命令行参数。
-> JGJ/T 231-2021（行业标准，57 页）381 节点；DB11/T 2100-2023（京津冀地标，75 页）422 节点。
-> 两本都是 **0 校验错误、0 重复 `node_id`**。另有一个 7 页测试件用于快速回归。
+> **当前状态：两本规范均已跑通，可单独用也可混库**，同一套解析器，只改命令行参数。
+> 两本都是 **0 校验错误、0 重复 `node_id`**。
 
-| | 7 页测试件 | JGJ/T 231-2021 | DB11/T 2100-2023 |
-|---|---|---|---|
-| 页数 | 7 | 57 | 75 |
-| 节点数 | 72 | **381** | **422** |
-| 解析耗时 | 0.7 s | 6.8 s | 6.0 s |
-| 条文 | 21 | **153** | **159** |
-| 表格 | 4 | 20 | 22 |
-| 图 | 1 | 13 | 22 |
-| **编号公式** | 20 | **22** | **0** |
-| 条文说明 | 0 | 50 | 78 |
-| 引用边（范围内） | 23（11） | **74（48）** | — |
+| | JGJ/T 231-2021（行业标准） | DB11/T 2100-2023（京津冀地标） |
+|---|---|---|
+| 页数 | 57 | 75 |
+| 节点数 | **381** | **422** |
+| 解析耗时 | 6.8 s | 6.0 s |
+| 条文 | **153** | **159** |
+| 表格 | 20 | 22 |
+| 图 | 13 | 22 |
+| **编号公式** | **22** | **0** |
+| 条文说明 | 50 | 78 |
+| 引用边（范围内） | **74（48）** | — |
+| 混库后 | **803 节点 / 719 条关系边** |（两本相加） |
 
 两本规范的**形态差异**本身就是个发现：JGJ 偏"**计算型**"（给公式，自己算），DB11 偏"**选用型**"（给选型表，直接查）——DB11 全文 **0 个编号公式、0 个"式中"变量段**，设计参数全部做成表格。
 
@@ -32,7 +32,7 @@
 
 | | RAGFlow v0.27.2（laws 预设） | 本项目 |
 |---|---|---|
-| 分块结果 | 373 块，**93 块不足 10 字**，中位数 38 字 | 72 节点，0 校验错误 |
+| 分块结果 | 373 块，**93 块不足 10 字**，中位数 38 字 | 381 节点，0 校验错误 |
 | 表格 | **79 个纯数字碎片**（表结构完全丢失） | 4 张表全部结构化，合并表头 / 转置表均正确 |
 | 公式 | 符号乱码（Symbol 字体私有区编码未处理） | 14 个码位全修复 + 变量表 + 截图 |
 | 条文号 | **错位**（6.2.3 的内容被并进标着 6.2.4 的块） | 正确 |
@@ -43,22 +43,23 @@
 
 ## 二、效果实测
 
-在 7 页测试件上跑过的问法（累计 23 条，通过 22 条）：
+在两本规范上跑过的问法（累计 30+ 条）：
 
 | 组别 | 结果 |
 |---|---|
 | 事实型 / 查表型 / 公式型 / 图形型 / 跨条对比 | ✅ 全部 top-1 命中，答案正确，引用可溯源 |
 | 口语化提问（5 条） | ✅ 4/5（"斜撑"失败 → 已用同义词扩展修复） |
 | 对抗探针：超范围 / 规范未规定 | ✅ **正确拒答** |
+| 对抗探针：**跨规范冲突** | ✅ **正确分列**（JGJ 650mm vs DB11 500mm，未合并） |
 | 对抗探针：枚举型（"本章哪些条文提到 X"） | ❌ 漏答（top-k 检索的固有缺陷） |
 
-**反幻觉是实测有效的。** 探针"扫地杆距可调底座底板不应大于多少"的真实答案 550mm 位于第 6.2.5 条，不在这 7 页内——而 550mm 是模型预训练里大概率知道的常识。系统没有编造，而是拒答。这依赖三层设计：提示词约束、材料中显式标注"引用的附录不在材料范围内"、生成后的引用回查。
+**反幻觉是实测有效的。** 把"附录不在本次材料范围内"这类信息显式标注给模型，并在生成后回查引用是否落在材料里——两层一起，让模型在材料缺失时拒答而不是调用预训练知识。三层设计：提示词约束、材料中显式标注、生成后引用回查。
 
 性能（RTX 5060 Ti 16GB + 本地 27B 模型，无 API 成本）：
 模型已加载时**首字 3~4 秒、完整回答 4~14 秒**；冷启动（模型需重新加载）首字会到 15 秒左右。
 实测生成速度约 **15 tok/s**，瓶颈是显存带宽（448 GB/s，128-bit GDDR7）。
 
-### 全量 57 页上的真实问答
+### 真实问答样例
 
 以下为实际输出（引用标签原样保留）：
 
@@ -130,29 +131,29 @@ pip install pdfplumber pypdfium2 pillow numpy networkx fastapi uvicorn
 
 ```bash
 # 1) 解析 PDF → 节点 + 抽检报告
-python run_parse.py                       # 默认解析测试件
 python run_parse.py --pdf "盘扣规范/jgj 231-2021.pdf" --offset 0 \
                     --standard-id JGJ231 --standard-code "JGJ/T 231-2021" \
-                    --doc-id jgj231_2021_main --out out_full
-# 换第二本规范：只改下面几个参数（standard-id 必须改，otherwise 节点 id 会和上一本撞）
+                    --standard-name "建筑施工承插型盘扣式钢管脚手架安全技术标准" \
+                    --version 2021 --doc-id jgj231_2021_main --out out_full
+# 换第二本规范：只改这几个参数（standard-id 必须改，否则节点 id 会和上一本撞）
 python run_parse.py --pdf "盘扣规范/DB11T 2100-2023.pdf" --offset 0 \
                     --standard-id DB11T2100 --standard-code "DB11/T 2100-2023" \
-                    --doc-id db11t2100_2023 --out out_db11
+                    --standard-name "承插型盘扣式钢管脚手架安全选用技术规程" \
+                    --version 2023 --doc-id db11t2100_2023 --out out_db11
 
 # 2) 建索引 + 跑检索验收（会打印 BM25 / 向量 / 混合 三路对比）
 python run_index.py
 
 # 3) 启动问答前端
-python app.py                             # 7 页测试件，打开 http://127.0.0.1:8000
-python app.py --profile full              # 全量 57 页
+python app.py                             # 默认：JGJ/T 231-2021 全本
 python app.py --profile db11              # DB11/T 2100-2023
 python app.py --profile mixed             # 两本规范混库（答案自动带标准号，冲突分列）
 ```
 
-两套数据可以随时切换（`--profile test` / `--profile full`），页面的标题、节点数、示例问题会跟着变。
+四个 profile 可以随时切换，页面的标题、节点数、示例问题会跟着变。
 也可以指向任意数据：`python app.py --nodes out_full/nodes.jsonl --pdf "盘扣规范/jgj 231-2021.pdf" --offset 0`
 
-> `--offset` 是「文件第 1 页对应的原书页码 − 1」。测试件首页码是 13 所以传 12，完整版传 0。
+> `--offset` 是「文件第 1 页对应的原书页码 − 1」。整本规范通常传 0（PDF 第 1 页就是书上第 1 页）。
 > 页面上的原文高亮按这个偏移把节点坐标映射回 PDF 页。
 
 ### 在 notebook 里调用
@@ -160,22 +161,23 @@ python app.py --profile mixed             # 两本规范混库（答案自动带
 ```python
 from rag_core import DocumentParser, validate_all, summary, to_jsonl, from_jsonl
 
-parser = DocumentParser("jgj 231-2021_test.pdf", "JGJ231", "JGJ/T 231-2021",
-                        "jgj231_2021_ch5_test", "2021",
-                        page_offset=12,           # 文件第 1 页 = 原书第 13 页
-                        figure_dir="out/figures")
+parser = DocumentParser("盘扣规范/jgj 231-2021.pdf", "JGJ231", "JGJ/T 231-2021",
+                        "jgj231_2021_main", "2021",
+                        standard_name="建筑施工承插型盘扣式钢管脚手架安全技术标准",
+                        page_offset=0,            # PDF 第 1 页 = 书上第 1 页
+                        figure_dir="out_full/figures")
 nodes = parser.parse()
 summary(nodes)          # 类型分布 / 待复核清单 / 引用边统计
 validate_all(nodes)     # 字段与坐标校验
-to_jsonl(nodes, "out/nodes.jsonl")
+to_jsonl(nodes, "out_full/nodes.jsonl")
 ```
 
 ```python
 from rag_core.index import Embedder, build_index
 from rag_core.generate import Answerer
 
-bundle = build_index(from_jsonl("out/nodes.jsonl"), "out/index")
-print(Answerer(bundle).answer("双排架2步3跨布置时立杆计算长度系数是多少")["answer"])
+bundle = build_index(from_jsonl("out_full/nodes.jsonl"), "out_full/index")
+print(Answerer(bundle).answer("立杆稳定性应该怎么验算")["answer"])
 ```
 
 ---
@@ -192,24 +194,20 @@ rag_core/
 
 run_parse.py     解析入口（产出 nodes.jsonl + 抽检报告，支持 --pdf/--out/--offset）
 run_index.py     建索引 + 检索验收（BM25 / 向量 / 混合 三路对比）
-app.py           FastAPI 服务：SSE 流式问答 / PDF 页面高亮渲染 / 双 profile 切换
+app.py           FastAPI 服务：SSE 流式问答 / PDF 页面高亮渲染 / 四个 profile 切换
 web/index.html   单页前端（标题、节点数、示例问题由服务端注入）
 
-out/
-  nodes.jsonl        结构化节点（7 页测试件，72 个）
-  check_report.md    抽检报告（原表 / 扁平版 / ASCII 网格三段对照）
-  figures/           裁切出的图
 out_full/
-  nodes.jsonl        全量 57 页的结构化节点（381 个）
-  check_report.md    全量抽检报告
+  nodes.jsonl        JGJ/T 231-2021 的结构化节点（381 个）
+  check_report.md    抽检报告（原表 / 扁平版 / ASCII 网格三段对照）
   figures/           13 张裁切图
 out_db11/
-  nodes.jsonl        DB11/T 2100-2023 的节点（422 个）
+  nodes.jsonl        DB11/T 2100-2023 的结构化节点（422 个）
   check_report.md    抽检报告
   figures/           22 张裁切图
 
 poc/
-  poc_extract.py     早期可行性验证（12 类排印陷阱的发现过程）
+  poc_extract.py     早期可行性验证（前 12 类排印陷阱的发现过程）
   search_lit.py      学术文献核查（OpenAlex / Crossref / arXiv）
 ```
 

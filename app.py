@@ -2,13 +2,13 @@
 """
 盘扣架规范问答 Demo 前端。
 
-    python app.py                                   # 默认：7 页测试件
-    python app.py --profile full                    # 全量 57 页
-    python app.py --nodes out_full/nodes.jsonl --pdf "盘扣规范/jgj 231-2021.pdf" --offset 0
+    python app.py                    # 默认：JGJ/T 231-2021 全本
+    python app.py --profile db11     # DB11/T 2100-2023
+    python app.py --profile mixed    # 两本规范混库（答案带标准号，冲突分列）
 
 三个接口：
     POST /api/ask        流式问答（SSE：meta → delta… → done）
-    GET  /api/page/{n}   渲染 PDF 页并高亮指定坐标（book 页码）
+    GET  /api/page/{sid}/{n}  按规范渲染 PDF 页并高亮指定坐标（book 页码）
     GET  /api/health     健康检查
 """
 from __future__ import annotations
@@ -28,20 +28,8 @@ from rag_core.index import Embedder, build_index
 
 ROOT = Path(__file__).resolve().parent
 
-# 两套可切换的数据：测试件（7 页，跑得快）与全量（57 页）
+# 可切换的数据源
 PROFILES = {
-    "test": {"nodes": "out/nodes.jsonl", "index": "out/index",
-             "pdfs": {"JGJ231": ("jgj 231-2021_test.pdf", 12)},
-             "title": "JGJ/T 231-2021《第 5 章 结构设计》",
-             "examples": ["双排架2步3跨布置时立杆计算长度系数是多少",
-                          "可调托撑的承载力设计值是多少",
-                          "搭设高度24m时支撑架高度调整系数取多少",
-                          "立杆稳定性应该怎么验算",
-                          "连墙件的稳定性怎么计算",
-                          "钢材的强度设计值去哪里查",
-                          "5.4.2 说了什么",
-                          "图5.1.4 是什么",
-                          "盘扣架立杆的颜色有什么要求"]},
     "full": {"nodes": "out_full/nodes.jsonl", "index": "out_full/index",
              "pdfs": {"JGJ231": ("盘扣规范/jgj 231-2021.pdf", 0)},
              "title": "JGJ/T 231-2021《全本 57 页》",
@@ -77,9 +65,9 @@ PROFILES = {
 }
 
 # 运行时配置（由 main 按 profile 填充）
-CFG = {"nodes": [ROOT / "out/nodes.jsonl"], "index": ROOT / "out/index",
-       "pdfs": {"JGJ231": (ROOT / "jgj 231-2021_test.pdf", 12)},
-       "title": PROFILES["test"]["title"], "examples": PROFILES["test"]["examples"]}
+CFG = {"nodes": [ROOT / "out_full/nodes.jsonl"], "index": ROOT / "out_full/index",
+       "pdfs": {"JGJ231": (ROOT / "盘扣规范/jgj 231-2021.pdf", 0)},
+       "title": PROFILES["full"]["title"], "examples": PROFILES["full"]["examples"]}
 
 STATE: dict = {}
 app = FastAPI(title="盘扣架规范问答 Demo")
@@ -288,7 +276,7 @@ def index():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--profile", choices=sorted(PROFILES), default="test")
+    ap.add_argument("--profile", choices=sorted(PROFILES), default="full")
     ap.add_argument("--nodes")
     ap.add_argument("--pdf")
     ap.add_argument("--offset", type=int)
