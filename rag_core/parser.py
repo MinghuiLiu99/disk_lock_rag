@@ -19,7 +19,8 @@ from typing import Sequence
 import pdfplumber
 
 from . import layout as L
-from .schema import NodeBuilder, node_id_of, link_structure, extract_refs
+from . import tables as T
+from .schema import NodeBuilder, node_id_of, link_structure, extract_refs, table_agent_text
 
 
 class DocumentParser:
@@ -231,6 +232,13 @@ class DocumentParser:
                 # 同时不能生成 "表None" 这种垃圾关键词——它会让混库建索引直接崩。
                 has_num = bool(t["table_id"])
                 kws = ([f"表{t['table_id']}", t["table_id"]] if has_num else ["未编号表"])
+                # 附表工具化：查值表（稳定系数/风压系数/截面特性）与表单模板不再把
+                # 几百个数字灌进 content——它们的代理文本换成"表头 + 参数 + 示例值"，
+                # 完整数据留在 body.rows 里，运行时由 TableTools 提供精确查询。
+                plain = table_agent_text(t["title"], t["cells"], t["notes"])
+                tool = T.build_tool(t["title"], t["cells"], t["header_rows"],
+                                    min_chars=800, orig_chars=len(plain))
+                brief = T.brief_content(t["title"], tool) if tool else None
                 node = b.table(t["table_id"], t["title"], t["cells"], [bp], [t["bbox"]],
                                notes=t["notes"], header_rows=t["header_rows"],
                                fill_down=t["fill_down"], units=t["units"],
@@ -239,6 +247,8 @@ class DocumentParser:
                                markdown_flat=L.to_markdown_flat(t["cells"], t["header_rows"],
                                                                 header_flat),
                                cross_page=t.get("cross_page"),
+                               agent_text=brief,
+                               tool=tool,
                                keywords=kws,
                                status="ok" if has_num else "need_review",
                                status_reason=None if has_num else "table_title_missing")

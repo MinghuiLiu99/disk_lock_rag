@@ -195,7 +195,14 @@ def cell_text(page, bbox) -> str:
 
 
 def _guess_header_rows(rows: list[list[str]]) -> int:
-    """表头行数：首行之后，第一列连续为空的行也属于表头（合并表头）。"""
+    """
+    表头行数：首行之后，第一列连续为空的行也属于表头（合并表头）。
+
+    **必须封顶**：这个判据假设"第一列为空 ⇒ 是表头续行"，但遇到第一列是
+    纵向合并单元格的大表就完全失效——DB11 表 A.0.1（113 行构配件规格）
+    第一列"立杆/水平杆…"跨多行，只有每组第一行有值，于是 113 行里 108 行
+    被判成表头。工程规范的表头最多 3 行（表 B.0.2 焊缝强度指标就是 3 行）。
+    """
     if len(rows) <= 1:
         return 1
     n = 1
@@ -204,7 +211,7 @@ def _guess_header_rows(rows: list[list[str]]) -> int:
             n += 1
         else:
             break
-    return min(n, len(rows) - 1) if len(rows) > 1 else 1
+    return min(n, 3, len(rows) - 1) if len(rows) > 1 else 1
 
 
 def _fill_down(rows: list[list[str]], header_rows: int) -> bool:
@@ -395,11 +402,20 @@ def merge_cross_page_tables(prev_page_tables: list[dict], cur_page_tables: list[
     if not (same_shape and a["bbox"][3] > 720 and b["bbox"][1] < 120
             and not (b.get("title") or "").strip()):
         return cur_page_tables
+
+    # 跨页表有两种形态，必须分开处理（之前只处理了第一种，DB11 表 A.0.1 因此被
+    # 当成"113 行里 108 行是表头"）：
+    #   ① 上页页尾只有 1~3 行 —— 那是**表头**，把它并到本页表体前面
+    #   ② 上页页尾有几十行  —— 那是**表体的前半**，应该整体行拼接
+    a_rows = [r for r in a["cells"] if any((x or "").strip() for x in r)]
     width = max(len(r) for r in b["cells"])
-    header = [list(r) + [""] * (width - len(r)) for r in a["cells"] if any(x.strip() for x in r)]
-    b["cells"] = header + b["cells"]
+    if len(a_rows) <= 3:
+        b["cells"] = [list(r) + [""] * (width - len(r)) for r in a_rows] + b["cells"]
+        b["header_rows"] = len(a_rows)
+    else:
+        b["cells"] = [[("" if c is None else c) for c in r] for r in a["cells"]] + b["cells"]
+        b["header_rows"] = a.get("header_rows", 1)
     b["n_rows"] = len(b["cells"])
-    b["header_rows"] = len(header)
     b["cross_page"] = [prev_page_no, cur_page_no]
     b["title"] = a.get("title") or b.get("title")
     b["table_id"] = a.get("table_id") or b.get("table_id")

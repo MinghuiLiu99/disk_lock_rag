@@ -15,6 +15,7 @@ import urllib.request
 from typing import Sequence
 
 from .schema import MODALITY_LEVEL
+from .tables import TableTools
 
 # 答案里出现的引用形态（与 schema.extract_refs 保持一致）
 CITE_PATTERNS = (
@@ -27,6 +28,27 @@ CITE_PATTERNS = (
     ("formula", re.compile(r"[（(]\s*(\d+\.\d+\.\d+-\d+)\s*[）)]")),
 )
 REFUSAL_MARKERS = ("未规定", "未涉及", "没有规定", "无法回答", "材料中未", "本章未")
+
+# 从问题里抽"可能是表格键"的候选值：
+#   · 数字（λ=100 / 长细比 100 / 高度 20）
+#   · 型号串（DB11 的 Z-LG-500 / B-LG-3000）
+_NUM_CAND = re.compile(r"\d+(?:\.\d+)?")
+_MODEL_CAND = re.compile(r"[A-Z]{1,3}-[A-Z]{1,4}-\d+(?:\.\d+)?")
+
+
+def _title_overlap(title: str, question: str) -> int:
+    """
+    表标题与问题的二元组重叠数，用来判断"这张表跟问题有没有关系"。
+
+    没有这道闸会出现"一个数字匹配所有表"：问"长细比是100的Q235钢管稳定系数"，
+    数字 100 既能当 λ 又能当离地高度，于是风压系数表也被查了一遍，
+    材料里多出两条无关的查表结果。
+    """
+    def grams(s: str) -> set:
+        s = re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]", "", s or "")
+        return {s[i:i + 2] for i in range(len(s) - 1)}
+
+    return len(grams(title) & grams(question))
 
 def build_system_prompt(standards: Sequence[dict], multi: bool) -> str:
     """
@@ -146,6 +168,89 @@ class Answerer:
         self.system_prompt = build_system_prompt(
             [{"id": s[0], "code": s[1], "name": s[2]} for s in self.standards],
             self.multi_standard)
+        # 附表工具：查值表（稳定系数/风压系数/构配件规格…）的运行时查询入口
+        self.table_tools = TableTools.from_nodes(bundle.nodes)
+
+    # ---------------------------------------------------------- 附表查值
+    @staticmethod
+    def _key_candidates(question: str) -> list[str]:
+        """从问题里抽出可能的表格键：先试型号串（更具体），再试数字（长的优先）。"""
+        models = _MODEL_CAND.findall(question)
+        nums = _NUM_CAND.findall(question)
+        # 去掉年份、规范号里的数字（如 GB 50009、2021）
+        nums = [n for n in nums if not (len(n) == 4 and n.startswith(("19", "20")))]
+        nums.sort(key=len, reverse=True)
+        out = []
+        for c in models + nums:
+            if c not in out:
+                out.append(c)
+        return out
+
+    def _probe_table(self, node: dict, question: str) -> "str | None":
+        """
+        命中的表若是查值表，就替模型把值查好，作为一行短材料附在表后面。
+
+        这样做而不是让模型自己读整张表：一张稳定系数表有 251 个值、2000+ 字，
+        模型在数字流里挑对的概率远低于按参数精确查表。
+        """
+        body = node.get("body") or {}
+        tool = body.get("tool")
+        if not tool or tool.get("kind") != "lookup":
+            return None
+        # 表标题里的钢材牌号要与问题一致：问 Q235 时别把 Q355 的表也查出来，
+        # 否则两张表的值一起进材料，模型有拿错的风险。
+        title = body.get("title", "")
+        grades = [g for g in ("Q355", "Q235", "Q195") if g in title]
+        asked = [g for g in ("Q355", "Q235", "Q195") if g in question]
+        if grades and asked and not set(grades) & set(asked):
+            return None
+        # 标题与问题的语义重叠不足就跳过，避免"一个数字匹配所有表"
+        if _title_overlap(title, question) < 2:
+            return None
+        for cand in self._key_candidates(question):
+            hit = self.table_tools.lookup(node["standard_id"], node["num"], cand)
+            if not hit:
+                continue
+            if isinstance(hit["value"], dict):
+                attrs = "；".join(f"{k}={v}" for k, v in hit["value"].items())
+                text = f"{hit['key_name']}={hit['key']} → {attrs}"
+            else:
+                text = f"{hit['key_name']}={hit['key']} → {hit.get('value_name', '值')}={hit['value']}"
+            mark = "" if hit["exact"] else "（表中无此精确值，取最接近的一档）"
+            return f"【查表结果】{hit['title']}：{text}{mark}"
+        return None
+
+    def _direct_lookup(self, question: str, exclude: Sequence[str] = ()) -> list[dict]:
+        """
+        直接对所有查值表试键，**不依赖检索命中**。
+
+        为什么需要这一步：型号（Z-LG-3000）、参数（λ=100）这类串对向量检索来说
+        信息量太低，表往往不会被召回——但它恰恰是唯一能回答问题的依据。
+        查值是精确匹配，误命中风险远低于向量相似度，所以可以全表扫一遍。
+        """
+        cands = self._key_candidates(question)
+        if not cands:
+            return []
+        out, seen = [], set(exclude)
+        for key, tool in self.table_tools.tools.items():
+            if tool.get("kind") != "lookup" or tool["node_id"] in seen:
+                continue
+            sid, num = key.split(":", 1)
+            node = self.by_id.get(tool["node_id"])
+            if not node:
+                continue
+            probe = self._probe_table(node, question)
+            if not probe:
+                continue
+            seen.add(tool["node_id"])
+            out.append({"node_id": node["node_id"], "type": "table", "num": node["num"],
+                        "label": _label(node), "pages": node["pages"],
+                        "bboxes": node["bboxes"], "image_path": None,
+                        "standard_id": node.get("standard_id", ""),
+                        "standard_code": node.get("standard_code", ""),
+                        "standard_name": node.get("standard_name", ""),
+                        "text": f"{_label(node)}\n" + probe, "direct_lookup": True})
+        return out
 
     # ---------------------------------------------------------- 上下文组装
     # 上下文预算：本地 27B 要先吞完材料才吐第一个字，但**实测代价很低**——
@@ -155,7 +260,7 @@ class Answerer:
     CONTEXT_TYPES = ("clause", "item", "table", "figure", "formula")
 
     def build_context(self, hits: Sequence[dict], max_chars: int = 9000,
-                      max_blocks: int = 10) -> list[dict]:
+                      max_blocks: int = 10, question: str = "") -> list[dict]:
         """
         父子回填 + 去重 + 排序。
         命中款/表/图/公式时把所属条文一并带上（用户要看完整条文）；
@@ -211,6 +316,10 @@ class Answerer:
             if n["type"] == "item" and n["parent_id"] in seen_clause:
                 continue
             text = render_block(n, with_standard=self.multi_standard)
+            if question and n["type"] == "table":
+                probe = self._probe_table(n, question)
+                if probe:
+                    text += "\n" + probe
             if used + len(text) > max_chars:
                 continue
             used += len(text)
@@ -278,7 +387,11 @@ class Answerer:
         """先做检索与上下文组装（快），把 messages 交给生成阶段（慢）。"""
         hits = self.bundle.retriever.search(question, top_k=top_k, alpha=alpha,
                                             expand_hops=expand_hops)
-        contexts = self.build_context(hits, max_blocks=max_blocks)
+        contexts = self.build_context(hits, max_blocks=max_blocks, question=question)
+        # 查值表补一轮"直接匹配"：型号/参数精确串往往召回不到表，但它是唯一依据
+        direct = self._direct_lookup(question, exclude=[c["node_id"] for c in contexts])
+        if direct:
+            contexts = contexts + direct[:3]
         material = "\n\n".join(c["text"] for c in contexts) or "（无）"
         return {
             "question": question,

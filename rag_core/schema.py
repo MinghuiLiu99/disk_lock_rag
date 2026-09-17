@@ -268,7 +268,7 @@ class NodeBuilder:
     def table(self, num: str, title: str, rows, pages, bboxes, *, notes=None,
               header_rows: int = 1, fill_down: bool = False, units=None,
               markdown=None, markdown_flat=None, header_flat=None,
-              cross_page=None, agent_text: "str | None" = None,
+              cross_page=None, agent_text: "str | None" = None, tool=None,
               status: str = "ok", status_reason: "str | None" = None, **kw) -> dict:
         data_rows = [list(r) for r in rows[header_rows:]]
         if header_flat:
@@ -283,6 +283,8 @@ class NodeBuilder:
             "notes": list(notes or []), "units": units,
             "markdown": markdown, "markdown_flat": markdown_flat,
             "cross_page": list(cross_page) if cross_page else None,
+            # 查值表的可查询结构（由 tables.build_tool 生成）；普通表为 None
+            "tool": tool,
         }
         if cross_page and status == "ok":
             status, status_reason = "need_review", status_reason or "cross_page_table_header"
