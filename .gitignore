@@ -16,6 +16,8 @@ out/index_diag/
 # 全量 PDF 的索引产物（embeddings.json 5.3MB，可重建）
 out_full/index/
 out_full/_diag/
+# 第二本规范（DB11/T 2100）的索引产物
+out_db11/index/
 
 # Office 临时锁文件
 ~$*

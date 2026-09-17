@@ -116,12 +116,14 @@ class Answerer:
         self.by_id = {n["node_id"]: n for n in bundle.nodes}
 
     # ---------------------------------------------------------- 上下文组装
-    # 上下文预算直接决定首字延迟：本地 27B 模型要先吞完材料才吐第一个字。
-    # 实测材料 10 块时首字 26.7s，砍到 6 块降到 10s 量级。
+    # 上下文预算：本地 27B 要先吞完材料才吐第一个字，但**实测代价很低**——
+    # 关掉思考模式后，6 块→2.4s、10 块→3.6s、20 块→4.2s，几乎不影响首字。
+    # （早期"10 块材料首字 26.7s"是在 reasoning 开着的情况下测的，前提已不成立。）
+    # 材料越多，闭包带回的公式/附表越全，所以默认给 10 块。
     CONTEXT_TYPES = ("clause", "item", "table", "figure", "formula")
 
-    def build_context(self, hits: Sequence[dict], max_chars: int = 3500,
-                      max_blocks: int = 6) -> list[dict]:
+    def build_context(self, hits: Sequence[dict], max_chars: int = 9000,
+                      max_blocks: int = 10) -> list[dict]:
         """
         父子回填 + 去重 + 排序。
         命中款/表/图/公式时把所属条文一并带上（用户要看完整条文）；
@@ -157,12 +159,15 @@ class Answerer:
         # 查值类问题只要 2~3 块材料，多喂的每一块都在按秒计费（提示词处理 ~100 token/s）。
         if direct:
             top = direct[0]["score"]
-            core = [r for r in direct if r["score"] >= 0.5 * top][:4]
+            # 上限跟着 max_blocks 走，给扩展命中留 2 个位置
+            core = [r for r in direct if r["score"] >= 0.5 * top][:max(2, max_blocks - 2)]
         else:
             core = []
         core = core or direct[:2]
-        expanded = [r for r in expanded if r["node_id"] not in {c["node_id"] for c in core}][:2]
-        items = core + expanded
+        room = max(1, max_blocks - len(core))
+        expanded = [r for r in expanded
+                    if r["node_id"] not in {c["node_id"] for c in core}][:room]
+        items = (core + expanded)[:max_blocks]
         out, used, seen_clause = [], 0, set()
         for r in items:
             if len(out) >= max_blocks:
@@ -234,11 +239,11 @@ class Answerer:
                     yield "content", delta["content"]
 
     def prepare(self, question: str, top_k: int = 6, expand_hops: int = 1,
-                alpha: float = 0.5) -> dict:
+                alpha: float = 0.5, max_blocks: int = 10) -> dict:
         """先做检索与上下文组装（快），把 messages 交给生成阶段（慢）。"""
         hits = self.bundle.retriever.search(question, top_k=top_k, alpha=alpha,
                                             expand_hops=expand_hops)
-        contexts = self.build_context(hits)
+        contexts = self.build_context(hits, max_blocks=max_blocks)
         material = "\n\n".join(c["text"] for c in contexts) or "（无）"
         return {
             "question": question,

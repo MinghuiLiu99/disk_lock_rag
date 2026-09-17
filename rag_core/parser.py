@@ -55,10 +55,23 @@ class DocumentParser:
             book_page = idx + self.page_offset
             lines = L.repair_broken_lines(L.drop_running_heads(
                 L.page_lines(page, y_tol=self.y_tol), page))
-            # 条文说明的封面页有"条文说明"字样（实测在 p42），从这一页起进入说明区。
+            # 条文说明的封面页有"条文说明"字样，从这一页起进入说明区。
             # 说明区的条号与正文完全相同（1.0.1 等），不区分会产生重复 node_id。
-            if notes_from is None and "条文说明" in re.sub(r"\s+", "", "".join(l["text"] for l in lines)):
-                notes_from = book_page
+            #
+            # 判据必须收紧成"像标题页"，否则会误判：
+            #   · JGJ/T 231 第一次出现在 p42 的独立标题页（整页仅 60 字符）✓
+            #   · DB11/T 2100 第一次出现在 p6 的**目次页**（整页 4446 字符，
+            #     其中一行是目录条目"附：条文说明 ......"）——只看"是否出现"的话，
+            #     从第 6 页起整本都会被当成条文说明（实测 244 个 explanation、0 个 clause）。
+            # 所以要求：该行去掉空格后基本就是"条文说明"本身，且整页字符很少。
+            if notes_from is None:
+                page_chars = sum(len(l["text"]) for l in lines)
+                if page_chars < 800:
+                    for l in lines:
+                        t = re.sub(r"\s+", "", l["text"])
+                        if "条文说明" in t and len(t) <= 12:
+                            notes_from = book_page
+                            break
             tables = L.real_tables(page, lines)
             for t in tables:
                 t["page"] = book_page
@@ -99,6 +112,9 @@ class DocumentParser:
         for line in pg["lines"]:
             blocked = (any(L.in_box(line, b) for b in pg["blocked"])
                        or L.norm_text(line["text"]) in pg["skip"])
+            # 目录行直接跳过（不产出节点，也不中断当前段落）
+            if not blocked and L.TOC_LINE_RE.search(line["text"]):
+                continue
             if blocked:
                 if cur:
                     segs.append(cur); cur = None

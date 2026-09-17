@@ -186,7 +186,11 @@ async def ask(payload: dict):
     if not question:
         return JSONResponse({"error": "empty question"}, status_code=400)
     ans = STATE["answerer"]
-    prepared = ans.prepare(question, top_k=int((payload or {}).get("top_k", 6)))
+    # 依据材料数量可由前端调（默认 6）：材料越多答案越全，但首字越慢——
+    # 本地 27B 要先吞完所有材料才吐第一个字。
+    prepared = ans.prepare(question,
+                           top_k=int((payload or {}).get("top_k", 10)),
+                           max_blocks=int((payload or {}).get("max_blocks", 10)))
 
     def sse(event: str, data: dict) -> str:
         return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
