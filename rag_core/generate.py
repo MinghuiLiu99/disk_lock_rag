@@ -26,8 +26,23 @@ CITE_PATTERNS = (
     # 公式号在本规范正文里是独立成行的、不带"式"字前缀，如 (5.3.3-2)。
     # 不带这条规则的话，模型引用这类公式会被误判成"材料里没有"的幻觉。
     ("formula", re.compile(r"[（(]\s*(\d+\.\d+\.\d+-\d+)\s*[）)]")),
+    # 附录条文写成"附录D.0.1"。必须单独认，否则会被下面的"附录D"规则吞掉、丢掉小节号，
+    # 回查时定位到的就是附录本体而不是那条条文。
+    ("clause", re.compile(r"附录\s*([A-Z]\.\d+(?:\.\d+)?)")),
+    # 附录。以前没有这条：模型引用附录时既不算有效也不算幻觉，直接静默消失，
+    # 引用回查的统计里凭空少一类。
+    # 两个负向断言把"附录D.0.1"这类带条号的写法排除在外：(?!\s*[A-Z]) 挡"附录DD"，
+    # (?!\.\d) 挡"附录D.0.1"。
+    ("appendix", re.compile(r"附录\s*([A-Z])(?!\s*[A-Z])(?!\.\d)")),
 )
 REFUSAL_MARKERS = ("未规定", "未涉及", "没有规定", "无法回答", "材料中未", "本章未")
+
+# 答案里"来源标记"的形态，提示词要求写成 [来源：标准号 条号]
+SOURCE_TAG_RE = re.compile(r"[\[【]\s*来源\s*[：:]\s*([^\]】]+)[\]】]")
+
+# 任意标准号形态，用来判断模型引用的标准**在不在本次材料里**：
+#   JGJ/T 231-2021 / DB11/T 2100-2023 / GB 51210-2016 / CJJ 166-2011
+STANDARD_CODE_RE = re.compile(r"[A-Z]{2,4}\d*\s*/?\s*T?\s*\d+(?:\.\d+)?\s*-\s*\d{4}")
 
 # 从问题里抽"可能是表格键"的候选值：
 #   · 数字（λ=100 / 长细比 100 / 高度 20）
@@ -103,6 +118,55 @@ def _label(node: dict) -> str:
     return f"第{num}节"
 
 
+def _standard_near(answer: str, pos: int, code_map: dict) -> tuple[str, bool]:
+    """
+    把一处引用归属到某本规范：从引用位置**往前**找最近出现的标准号。
+
+    返回 (standard_id, 是否可信)：
+      ("", True)   —— 引用前面没有标准号。单规范模式下提示词允许省略，返回空串，
+                      由调用方按编号反查兜底
+      (sid, True)  —— 定位到了本次材料里的某一本
+      ("", False)  —— 前面有标准号，但它**不在本次材料里**，直接判为幻觉。
+                      例如材料只给了 JGJ 的内容，模型却写"[来源：DB11/T 2100-2023 第8.0.7条]"——
+                      这两本的 8.0.7 内容完全不同，不能算数
+    """
+    found, code = -1, ""
+    for m in STANDARD_CODE_RE.finditer(answer, 0, pos):
+        if m.start() > found:
+            found, code = m.start(), m.group(0)
+    if found < 0:
+        return "", True
+    key = re.sub(r"\s+", "", code)
+    for known, sid in code_map.items():
+        if re.sub(r"\s+", "", known) == key:
+            return sid, True
+    return "", False
+
+
+def _render_template_table(b: dict, fallback: str = "") -> str:
+    """
+    表单模板的渲染（表 D.0.1 / D.0.2 这类施工验收记录表）。
+
+    不能套用普通表格的 markdown_flat：这类表大量使用合并单元格，`fill_down` 之后
+    整列都是重复值——实测表 D.0.1 的表头被 pdfplumber 抽成 22 列全是"项目名称"，
+    渲染出来是一片乱格子，信息量为零。
+
+    真正有用的是**第一列去重后的清单**：它是这张表的填写项与检查项
+    （项目名称、搭设部位、立杆垂直度≤L/500且±50、水平杆水平度…）。
+    """
+    rows = b.get("rows") or []
+    items, seen = [], set()
+    for row in rows:
+        v = re.sub(r"\s+", " ", (row[0] if row else "") or "").strip()
+        v = v.replace(" / ", "/").strip("/")
+        if v and v not in seen and len(v) <= 40:
+            seen.add(v)
+            items.append(v)
+    if not items:
+        return fallback
+    return "（表单模板，原表为空白记录表）\n表中栏目与检查项：" + "、".join(items)
+
+
 def render_block(node: dict, with_standard: bool = False) -> str:
     """把节点渲染成给 LLM 的材料块。表格用扁平表头版，公式带变量表。"""
     label = _label(node)
@@ -115,7 +179,10 @@ def render_block(node: dict, with_standard: bool = False) -> str:
     body = node["content"]
     if node["type"] == "table":
         b = node["body"]
-        body = b.get("markdown_flat") or b.get("markdown") or body
+        if (b.get("tool") or {}).get("kind") == "template":
+            body = _render_template_table(b, body)
+        else:
+            body = b.get("markdown_flat") or b.get("markdown") or body
         if b.get("notes"):
             body += "\n注：" + " ".join(b["notes"])
     elif node["type"] == "figure":
@@ -257,7 +324,14 @@ class Answerer:
     # 关掉思考模式后，6 块→2.4s、10 块→3.6s、20 块→4.2s，几乎不影响首字。
     # （早期"10 块材料首字 26.7s"是在 reasoning 开着的情况下测的，前提已不成立。）
     # 材料越多，闭包带回的公式/附表越全，所以默认给 10 块。
-    CONTEXT_TYPES = ("clause", "item", "table", "figure", "formula")
+    # 能进模型上下文的类型。两个容易被漏掉的：
+    #   explanation —— 条文说明是"这条为什么这么规定"的唯一来源，128 个节点。
+    #                  之前不在白名单，导致 _link_explanations 建好的双向关联在生成阶段被切断。
+    #   appendix    —— 附录节点本身只是"指路牌"（内容就是"附录D 脚手架施工验收记录"），
+    #                  但它同时是父子回填的上游：命中 D.0.1 时要把附录D 带进来，
+    #                  否则用户看到的材料里没有"这条在附录D 里"。回填也走这个白名单。
+    CONTEXT_TYPES = ("clause", "item", "table", "figure", "formula",
+                     "explanation", "appendix")
 
     def build_context(self, hits: Sequence[dict], max_chars: int = 9000,
                       max_blocks: int = 10, question: str = "") -> list[dict]:
@@ -283,8 +357,13 @@ class Answerer:
                 picked[pid] = {"node_id": pid, "type": p["type"], "num": p["num"],
                                "score": 0.0, "via_parent": r["node_id"]}
 
-        order = {"clause": 0, "item": 1, "section": 2, "chapter": 3,
-                 "table": 4, "formula": 5, "figure": 6}
+        # 内容型的排前面，导航型的排后面。
+        # 这张表决定"扩展带出的节点"谁抢得到剩下的名额（默认 10 块里留 2 个位置）。
+        # 之前漏了 appendix / explanation，它们会拿到默认值 9 掉到队尾——
+        # 结果就是检索列表里能看到附录D，材料里却永远没有它。
+        order = {"clause": 0, "item": 1, "explanation": 2,
+                 "table": 3, "formula": 4, "figure": 5,
+                 "appendix": 6, "section": 7, "chapter": 8}
         # 两段填充：先把"直接命中"（score>0）按类型排进去，再补"扩展带出"的。
         # 否则零分的扩展节点会靠类型顺序把高分的表/图挤出名额——实测踩过：
         # 问"可调托撑承载力"，表5.1.9 被 5 条零分扩展条文挤掉，模型只能回答"材料中未规定"。
@@ -301,9 +380,19 @@ class Answerer:
         else:
             core = []
         core = core or direct[:2]
-        room = max(1, max_blocks - len(core))
+        core_ids = {c["node_id"] for c in core}
+        # 父条文已入选的"款"要提前剔掉，不能等到渲染循环里才跳过它。
+        # 渲染循环的跳过是对的（父条文已收录，再单独渲染"款"就是同一段话出现两次），
+        # 但那是**切片之后**才做的——被跳过的款已经白占了 expanded 的名额。
+        # 实测踩过：8.0.5 / 8.0.4 入选 core 后，它们的 4 个款占满了 expanded 的 2 个位置，
+        # 引用图带出来的附录D 被挤在外面，材料里就永远看不到"这条规定在附录D 里"。
+        core_clauses = {c["node_id"] for c in core if c["type"] == "clause"}
         expanded = [r for r in expanded
-                    if r["node_id"] not in {c["node_id"] for c in core}][:room]
+                    if r["node_id"] not in core_ids
+                    and not (r["type"] == "item"
+                             and self.by_id[r["node_id"]]["parent_id"] in core_clauses)]
+        room = max(1, max_blocks - len(core))
+        expanded = expanded[:room]
         items = (core + expanded)[:max_blocks]
         out, used, seen_clause = [], 0, set()
         for r in items:
@@ -425,26 +514,60 @@ class Answerer:
           · secondary  —— 编号只出现在材料正文的转述里（如条文写"按附录B表B.0.2采用"），
                           模型引用它不算幻觉，但也不是直接依据
           · invalid    —— 材料里根本找不到，判为幻觉
+
+        **引用必须定位到具体标准。** 两本规范的 (类型, 编号) 有 135 个重叠
+        ——所有章节号，加上大批条文号。例如 JGJ 和 DB11 都有 8.0.7，内容完全不同：
+        JGJ 8.0.7 是"验收后应形成记录"，DB11 8.0.7 是"发生下列情况时应重新检查验收"。
+        只比 (类型, 编号) 的话，模型把 DB11 的结论标成 JGJ 的条号也会判为有效，
+        混库模式的防幻觉机制等于失效。所以比对键统一成三元组（标准, 类型, 编号）。
         """
-        allowed_nums = {(c["type"], str(c["num"])) for c in contexts}
-        mentioned: set[tuple[str, str]] = set()
+        allowed = {(c.get("standard_id", ""), c["type"], str(c["num"])) for c in contexts}
+        # 反查：同一个 (类型, 编号) 出现在哪几本里——答案省略标准号时用它兜底
+        owners: dict[tuple[str, str], set[str]] = {}
+        for sid, node_type, num in allowed:
+            owners.setdefault((node_type, num), set()).add(sid)
+        # 标准号 / 标准标识 → standard_id，用来把答案里的引用归到某一本
+        code_map: dict[str, str] = {}
         for c in contexts:
+            for key in (c.get("standard_code"), c.get("standard_id")):
+                if key:
+                    code_map[key] = c.get("standard_id", "")
+
+        mentioned: set[tuple[str, str, str]] = set()
+        for c in contexts:
+            sid = c.get("standard_id", "")
             for node_type, pattern in CITE_PATTERNS:
                 for raw in pattern.findall(c["text"]):
-                    mentioned.add((node_type, re.sub(r"\s+", "", raw)))
+                    mentioned.add((sid, node_type, re.sub(r"\s+", "", raw)))
+
         cited, secondary, bad = [], [], []
-        for node_type, pattern in CITE_PATTERNS:
-            for raw in pattern.findall(answer):
-                num = re.sub(r"\s+", "", raw)
-                item = {"type": node_type, "num": num}
-                if (node_type, num) in allowed_nums:
-                    if item not in cited:
-                        cited.append(item)
-                elif (node_type, num) in mentioned:
-                    if item not in secondary:
-                        secondary.append(item)
-                elif item not in bad:
-                    bad.append(item)
+        # 只在**来源标记内部**抽引用。模型在正文里复述"应符合附录D的要求"是正常表述，
+        # 不该被当成一次引用声明（否则每句转述都会拿去回查，凭空报出一堆幻觉）。
+        # 完全没有来源标记时退回全篇扫描——那是模型没按格式写，但仍要能查出问题。
+        segments = [(m.start(1), m.group(1)) for m in SOURCE_TAG_RE.finditer(answer)]
+        if not segments:
+            segments = [(0, answer)]
+        for base, seg in segments:
+            for node_type, pattern in CITE_PATTERNS:
+                for m in pattern.finditer(seg):
+                    num = re.sub(r"\s+", "", m.group(1))
+                    sid, known = _standard_near(answer, base + m.start(), code_map)
+                    if known and sid:
+                        cands = [(sid, node_type, num)]
+                    elif known:
+                        cands = [(s, node_type, num)
+                                 for s in owners.get((node_type, num), ())]
+                    else:
+                        cands = []          # 引用了不在材料里的标准
+                    item = {"type": node_type, "num": num, "standard_id": sid}
+                    if any(c in allowed for c in cands):
+                        if item not in cited:
+                            cited.append(item)
+                    elif any(c in mentioned for c in cands):
+                        if item not in secondary:
+                            secondary.append(item)
+                    elif item not in bad:
+                        bad.append(item)
         return {"cited": cited, "secondary": secondary, "invalid": bad,
                 "has_citation": bool(cited or secondary), "all_valid": not bad,
                 "allowed": sorted(f"{c['label']}" for c in contexts)}
