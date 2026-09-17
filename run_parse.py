@@ -105,6 +105,8 @@ def main():
     ap.add_argument("--out", default="out")
     ap.add_argument("--standard-id", default="JGJ231")
     ap.add_argument("--standard-code", default="JGJ/T 231-2021")
+    ap.add_argument("--standard-name", default="建筑施工承插型盘扣式钢管脚手架安全技术标准",
+                    help="规范中文全称，用于答案与前端展示「依据哪本规范」")
     ap.add_argument("--doc-id", default="jgj231_2021_ch5_test")
     ap.add_argument("--version", default="2021")
     ap.add_argument("--offset", type=int, default=12,
@@ -114,7 +116,8 @@ def main():
     out_dir = Path(args.out)
     fig_dir = out_dir / "figures"
     parser = DocumentParser(args.pdf, args.standard_id, args.standard_code,
-                            args.doc_id, args.version, page_offset=args.offset,
+                            args.doc_id, args.version,
+                            standard_name=args.standard_name, page_offset=args.offset,
                             figure_dir=fig_dir, verbose=True)
     nodes = parser.parse()
     check = validate_all(nodes)

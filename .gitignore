@@ -18,6 +18,8 @@ out_full/index/
 out_full/_diag/
 # 第二本规范（DB11/T 2100）的索引产物
 out_db11/index/
+# 混库索引产物
+out_mixed/
 
 # Office 临时锁文件
 ~$*

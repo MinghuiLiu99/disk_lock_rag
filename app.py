@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parent
 # 两套可切换的数据：测试件（7 页，跑得快）与全量（57 页）
 PROFILES = {
     "test": {"nodes": "out/nodes.jsonl", "index": "out/index",
-             "pdf": "jgj 231-2021_test.pdf", "offset": 12,
+             "pdfs": {"JGJ231": ("jgj 231-2021_test.pdf", 12)},
              "title": "JGJ/T 231-2021《第 5 章 结构设计》",
              "examples": ["双排架2步3跨布置时立杆计算长度系数是多少",
                           "可调托撑的承载力设计值是多少",
@@ -43,7 +43,7 @@ PROFILES = {
                           "图5.1.4 是什么",
                           "盘扣架立杆的颜色有什么要求"]},
     "full": {"nodes": "out_full/nodes.jsonl", "index": "out_full/index",
-             "pdf": "盘扣规范/jgj 231-2021.pdf", "offset": 0,
+             "pdfs": {"JGJ231": ("盘扣规范/jgj 231-2021.pdf", 0)},
              "title": "JGJ/T 231-2021《全本 57 页》",
              "examples": ["插销安装后下沉量不应大于多少",
                           "扫地杆距可调底座底板不应大于多少",
@@ -55,13 +55,31 @@ PROFILES = {
                           "拆除脚手架时应注意哪些安全要求",
                           "2步3跨布置时双排架的计算长度系数",
                           "盘扣架立杆的颜色有什么要求"]},
+    "db11": {"nodes": "out_db11/nodes.jsonl", "index": "out_db11/index",
+             "pdfs": {"DB11T2100": ("盘扣规范/DB11T 2100-2023.pdf", 0)},
+             "title": "DB11/T 2100-2023《全本 75 页》",
+             "examples": ["脚手架的步距不应超过多少",
+                          "可调托撑伸出顶层水平杆的悬臂长度不应超过多少",
+                          "标准型双排落地脚手架的搭设高度限值",
+                          "钢管外径和壁厚的允许偏差是多少",
+                          "斜杆搭设有什么要求"]},
+    # 混库：两本规范进同一个索引。答案会自动带上标准号，冲突时分别列出。
+    "mixed": {"nodes": ["out_full/nodes.jsonl", "out_db11/nodes.jsonl"],
+              "index": "out_mixed/index",
+              "pdfs": {"JGJ231": ("盘扣规范/jgj 231-2021.pdf", 0),
+                       "DB11T2100": ("盘扣规范/DB11T 2100-2023.pdf", 0)},
+              "title": "两本规范混库（JGJ/T 231-2021 + DB11/T 2100-2023）",
+              "examples": ["可调托撑伸出顶层水平杆的悬臂长度不应超过多少",
+                           "脚手架的步距不应超过多少",
+                           "立杆稳定性应该怎么验算",
+                           "插销安装后下沉量不应大于多少",
+                           "脚手架的搭设高度有什么限制"]},
 }
 
 # 运行时配置（由 main 按 profile 填充）
-CFG = {"nodes": ROOT / "out/nodes.jsonl", "index": ROOT / "out/index",
-       "pdf": ROOT / "jgj 231-2021_test.pdf", "offset": 12,
+CFG = {"nodes": [ROOT / "out/nodes.jsonl"], "index": ROOT / "out/index",
+       "pdfs": {"JGJ231": (ROOT / "jgj 231-2021_test.pdf", 12)},
        "title": PROFILES["test"]["title"], "examples": PROFILES["test"]["examples"]}
-PDF_PAGE_OFFSET = 12
 
 STATE: dict = {}
 app = FastAPI(title="盘扣架规范问答 Demo")
@@ -70,7 +88,9 @@ app = FastAPI(title="盘扣架规范问答 Demo")
 def boot() -> None:
     if STATE:
         return
-    nodes = from_jsonl(CFG["nodes"])
+    nodes = []
+    for p in CFG["nodes"]:
+        nodes += from_jsonl(p)
     bundle = build_index(nodes, CFG["index"],
                          embedder=Embedder(cache_path=CFG["index"] / "embeddings.json"))
     STATE["bundle"] = bundle
@@ -79,12 +99,14 @@ def boot() -> None:
     STATE["pdf"] = None
 
 
-def _pdf():
-    """惰性打开 PDF（pypdfium2），用于高亮渲染。"""
-    if STATE.get("pdf") is None:
+def _pdf(standard_id: str):
+    """按规范打开对应 PDF（pypdfium2）。混库时每本规范各有一份 PDF。"""
+    STATE.setdefault("pdfs", {})
+    if standard_id not in STATE["pdfs"]:
         import pypdfium2 as pdfium
-        STATE["pdf"] = pdfium.PdfDocument(str(CFG["pdf"]))
-    return STATE["pdf"]
+        path, _ = CFG["pdfs"][standard_id]
+        STATE["pdfs"][standard_id] = pdfium.PdfDocument(str(path))
+    return STATE["pdfs"][standard_id]
 
 
 _COUNT: dict = {}
@@ -92,14 +114,15 @@ _COUNT: dict = {}
 
 def _node_count() -> int:
     """页面上显示节点数。直接数 JSONL 行数，避免为了显示一个数字去建索引。"""
-    key = str(CFG["nodes"])
+    key = "|".join(str(p) for p in CFG["nodes"])
     if key not in _COUNT:
-        _COUNT[key] = sum(1 for line in CFG["nodes"].open(encoding="utf-8") if line.strip())
+        _COUNT[key] = sum(sum(1 for line in p.open(encoding="utf-8") if line.strip())
+                          for p in CFG["nodes"])
     return _COUNT[key]
 
 
-def render_page(book_page: int, boxes: list[list[float]], dpi: int = 150,
-                band_pad: float = 90.0) -> bytes:
+def render_page(standard_id: str, book_page: int, boxes: list[list[float]],
+                dpi: int = 150, band_pad: float = 90.0) -> bytes:
     """
     渲染原书某页并把给定坐标框画成高亮。坐标是 pdfplumber 约定（top 距上沿）。
 
@@ -108,10 +131,11 @@ def render_page(book_page: int, boxes: list[list[float]], dpi: int = 150,
     直接放整页会导致高亮位置在可视区外、看起来是空白（实测踩过）。
     """
     from PIL import ImageDraw
-    doc = _pdf()
-    idx = book_page - PDF_PAGE_OFFSET - 1
+    doc = _pdf(standard_id)
+    _, offset = CFG["pdfs"][standard_id]
+    idx = book_page - offset - 1
     if idx < 0 or idx >= len(doc):
-        raise ValueError(f"页码 {book_page} 超出测试件范围")
+        raise ValueError(f"{standard_id} 的页码 {book_page} 超出范围")
     img = doc[idx].render(scale=dpi / 72).to_pil().convert("RGB")
     scale = dpi / 72.0
     draw = ImageDraw.Draw(img, "RGBA")
@@ -135,11 +159,14 @@ def health():
     b = STATE["bundle"]
     return {"nodes": len(b.nodes), "graph": b.graph.stats(),
             "embedder": b.embedder_name, "model": STATE["answerer"].model,
-            "profile": CFG["title"], "pdf": str(CFG["pdf"].relative_to(ROOT))}
+            "profile": CFG["title"],
+            "standards": [{"id": sid, "pdf": str(p.relative_to(ROOT))}
+                          for sid, (p, _) in CFG["pdfs"].items()],
+            "multi_standard": STATE["answerer"].multi_standard}
 
 
-@app.get("/api/page/{book_page}")
-def page_image(book_page: int, boxes: str = ""):
+@app.get("/api/page/{standard_id}/{book_page}")
+def page_image(standard_id: str, book_page: int, boxes: str = ""):
     boot()
     parsed: list[list[float]] = []
     if boxes:
@@ -147,7 +174,7 @@ def page_image(book_page: int, boxes: str = ""):
             if chunk.strip():
                 parsed.append([float(v) for v in chunk.split(",")])
     try:
-        return Response(render_page(book_page, parsed), media_type="image/png")
+        return Response(render_page(standard_id, book_page, parsed), media_type="image/png")
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=400)
 
@@ -160,6 +187,8 @@ def node_detail(node_id: str):
     if not n:
         return JSONResponse({"error": "not found"}, status_code=404)
     return {"node_id": n["node_id"], "type": n["type"], "num": n["num"],
+            "standard_id": n.get("standard_id", ""), "standard_code": n.get("standard_code", ""),
+            "standard_name": n.get("standard_name", ""),
             "path": n["path"], "pages": n["pages"], "bboxes": n["bboxes"],
             "content": n["content"], "body": n["body"],
             "modality": n["modality"], "refs": n["refs"],
@@ -197,8 +226,11 @@ async def ask(payload: dict):
 
     def gen():
         yield sse("meta", {"question": question, "model": prepared["model"],
+                           "standards": prepared.get("standards", []),
                            "contexts": [{k: c[k] for k in
-                                         ("node_id", "type", "num", "label", "pages", "bboxes", "image_path")}
+                                         ("node_id", "type", "num", "label", "pages", "bboxes",
+                                          "image_path", "standard_id", "standard_code",
+                                          "standard_name")}
                                         for c in prepared["contexts"]],
                            "hits": prepared["hits"],
                            "table_rows": prepared["table_rows"]})
@@ -263,12 +295,14 @@ if __name__ == "__main__":
     ap.add_argument("--port", type=int, default=8000)
     args = ap.parse_args()
     prof = PROFILES[args.profile]
-    CFG.update(nodes=ROOT / (args.nodes or prof["nodes"]),
-               index=ROOT / (prof["index"] if args.nodes is None else Path(args.nodes).parent),
-               pdf=ROOT / (args.pdf or prof["pdf"]),
-               offset=args.offset if args.offset is not None else prof["offset"],
-               title=prof["title"], examples=prof["examples"])
-    PDF_PAGE_OFFSET = CFG["offset"]
-    print(f"数据源: {CFG['nodes'].relative_to(ROOT)} | PDF: {CFG['pdf'].relative_to(ROOT)} "
-          f"| 页码偏移 {CFG['offset']} | {CFG['title']}")
+    node_spec = args.nodes or prof["nodes"]
+    nodes = [ROOT / p for p in (node_spec if isinstance(node_spec, list) else [node_spec])]
+    pdfs = {sid: (ROOT / rel, off) for sid, (rel, off) in prof["pdfs"].items()}
+    if args.pdf:                                  # 单规范时才允许命令行覆盖 PDF
+        sid = next(iter(pdfs))
+        pdfs[sid] = (ROOT / args.pdf, args.offset if args.offset is not None else pdfs[sid][1])
+    CFG.update(nodes=nodes,
+               index=ROOT / (prof["index"] if args.nodes is None else nodes[0].parent),
+               pdfs=pdfs, title=prof["title"], examples=prof["examples"])
+    print(f"数据源: {[p.name for p in nodes]} | 规范 {list(pdfs)} | {CFG['title']}")
     uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="warning")

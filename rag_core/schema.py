@@ -58,10 +58,14 @@ STATUS_REASONS = (
     "running_head_included",    # 页眉页脚混入
     "out_of_scope_ref",         # 存在超出文档范围的引用目标
     "encoding_repaired",        # 做过符号编码修复，需抽检
+    "table_title_missing",      # 表格未识别出表号（如原文漏印"表"字）
 )
 
 NODE_FIELDS = (
     "node_id", "standard_id", "standard_code", "doc_id", "version", "type", "num",
+    # standard_name：规范中文全称。多本规范并存时，答案和前端必须能说清"依据哪一本"，
+    # 光有简称（JGJ231）和标准号（JGJ/T 231-2021）不足以让人一眼认出是哪本。
+    "standard_name",
     "level", "chapter", "section", "path", "pages", "bboxes",
     "content", "body",
     "parent_id", "child_ids", "refs", "referenced_by", "explains", "explained_by",
@@ -185,9 +189,11 @@ class NodeBuilder:
         n = b.clause("5.1.1", text, pages=[13], bboxes=[[70.9, 153.2, 523.4, 246.0]])
     """
 
-    def __init__(self, standard_id: str, standard_code: str, doc_id: str, version: str):
+    def __init__(self, standard_id: str, standard_code: str, doc_id: str, version: str,
+                 standard_name: str = ""):
         self.standard_id = standard_id
         self.standard_code = standard_code
+        self.standard_name = standard_name
         self.doc_id = doc_id
         self.version = version
         self.chapter_title: "str | None" = None
@@ -220,6 +226,7 @@ class NodeBuilder:
             "standard_code": self.standard_code,
             "doc_id": self.doc_id,
             "version": self.version,
+            "standard_name": self.standard_name,
             "type": node_type,
             "num": num,
             "level": TYPE_LEVEL[node_type],

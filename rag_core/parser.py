@@ -35,10 +35,12 @@ class DocumentParser:
     """
 
     def __init__(self, pdf_path, standard_id: str, standard_code: str, doc_id: str,
-                 version: str, *, page_offset: int = 0, figure_dir: str | Path | None = None,
+                 version: str, *, standard_name: str = "", page_offset: int = 0,
+                 figure_dir: str | Path | None = None,
                  y_tol: float = 6.0, verbose: bool = False):
         self.pdf_path = Path(pdf_path)
-        self.builder = NodeBuilder(standard_id, standard_code, doc_id, version)
+        self.builder = NodeBuilder(standard_id, standard_code, doc_id, version,
+                                   standard_name=standard_name)
         self.standard_id = standard_id
         self.page_offset = int(page_offset)
         self.figure_dir = Path(figure_dir) if figure_dir else None
@@ -224,6 +226,11 @@ class DocumentParser:
                 if t.get("merged_into_next"):
                     continue
                 header_flat = L.flat_header(t["cells"], t["header_rows"])
+                # 表号可能识别不出来（原文漏印"表"字、或是跨页续表的碎片）。
+                # 这类表内容往往是真知识，不能丢，但必须标出来让人复核；
+                # 同时不能生成 "表None" 这种垃圾关键词——它会让混库建索引直接崩。
+                has_num = bool(t["table_id"])
+                kws = ([f"表{t['table_id']}", t["table_id"]] if has_num else ["未编号表"])
                 node = b.table(t["table_id"], t["title"], t["cells"], [bp], [t["bbox"]],
                                notes=t["notes"], header_rows=t["header_rows"],
                                fill_down=t["fill_down"], units=t["units"],
@@ -232,7 +239,9 @@ class DocumentParser:
                                markdown_flat=L.to_markdown_flat(t["cells"], t["header_rows"],
                                                                 header_flat),
                                cross_page=t.get("cross_page"),
-                               keywords=[f"表{t['table_id']}", t["table_id"]])
+                               keywords=kws,
+                               status="ok" if has_num else "need_review",
+                               status_reason=None if has_num else "table_title_missing")
                 nodes.append(node)
                 continue
 

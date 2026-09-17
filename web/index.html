@@ -135,6 +135,14 @@ function renderContexts(list){
     const d = document.createElement("div");
     d.className = "ctx";
     d.innerHTML = `<div class="hd">${esc(c.label)}　<span class="muted">p.${(c.pages||[]).join("/")}　${esc(c.type)}</span></div>`;
+    // 多规范并存时，每张卡片标明来自哪一本
+    if (c.standard_code) {
+      const tag = document.createElement("div");
+      tag.className = "muted";
+      tag.style.cssText = "font-size:12px;color:#b45309;margin-top:2px";
+      tag.textContent = `${c.standard_code}${c.standard_name ? " 《" + c.standard_name + "》" : ""}`;
+      d.appendChild(tag);
+    }
     const img = c.image_path ? `<img src="/api/node/${encodeURIComponent(c.node_id)}" style="display:none">` : "";
     d.innerHTML += img;
     const body = document.createElement("div");
@@ -181,7 +189,7 @@ async function loadNode(c, body, d){
   });
   Object.entries(byPage).forEach(([page, bs]) => {
     imgs += `<div class="muted" style="margin-top:6px">原文高亮 p.${page}</div>
-             <img src="/api/page/${page}?boxes=${encodeURIComponent(bs.join(";"))}">`;
+             <img src="/api/page/${encodeURIComponent(n.standard_id || "")}/${page}?boxes=${encodeURIComponent(bs.join(";"))}">`;
   });
   body.innerHTML = html + imgs;
 }

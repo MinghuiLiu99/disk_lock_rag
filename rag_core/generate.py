@@ -28,17 +28,36 @@ CITE_PATTERNS = (
 )
 REFUSAL_MARKERS = ("未规定", "未涉及", "没有规定", "无法回答", "材料中未", "本章未")
 
-SYSTEM_PROMPT = """你是《建筑施工承插型盘扣式钢管脚手架安全技术标准》JGJ/T 231-2021 的检索助手。
+def build_system_prompt(standards: Sequence[dict], multi: bool) -> str:
+    """
+    系统提示词按知识库里的规范动态生成。
+    单规范时引用只写条号；多规范时必须带标准号——否则"第5.1.2条"指哪一本说不清。
+    """
+    names = "；".join(f"《{s['name']}》{s['code']}" for s in standards) or "（空）"
+    cite_rule = (
+        "格式严格写成：[来源：标准号 条号]，例如 [来源：JGJ/T 231-2021 第5.3.3条]、"
+        "[来源：DB11/T 2100-2023 表3.0.6]。**标准号不能省略**——知识库里有多个标准，"
+        "同一个条号在不同标准下含义不同。"
+        if multi else
+        "格式严格写成：[来源：第5.3.3条] 或 [来源：表5.1.9] 或 [来源：图5.1.4] 或 [来源：式（5.3.3-1）]"
+    )
+    conflict_rule = (
+        "8. 若不同标准对同一问题规定不一致，必须分别列出并说明各自出处，不要合并成一个结论\n"
+        if multi else ""
+    )
+    return f"""你是工程建设标准的检索助手。
+本知识库包含：{names}
 只依据【材料】回答，禁止使用材料之外的任何知识，禁止推测。
 
 规则：
-1. 每个结论后面必须标注来源，格式严格写成：[来源：第5.3.3条] 或 [来源：表5.1.9] 或 [来源：图5.1.4] 或 [来源：式（5.3.3-1）]
+1. 每个结论后面必须标注来源，{cite_rule}
 2. 材料中没有的内容，直接回答"提供的材料中未规定"，不要编造
 3. 涉及数值、公式、表格取值时原样引用，不要换算、不要四舍五入
 4. 回答用简洁的书面语，分点陈述；不要大段重复材料原文
-5. 引用时只写条号本身，不要写章节限定
-6. 回答控制在 250 字以内，分点不超过 6 条
-7. 不要展开分析过程，直接给结论"""
+5. 回答控制在 250 字以内，分点不超过 6 条
+6. 不要展开分析过程，直接给结论
+7. 若材料里出现"用词：严禁/必须/应/宜/可"，引用时要保留该用词，不要把"宜"说成"应"
+{conflict_rule}"""
 
 
 def _label(node: dict) -> str:
@@ -50,19 +69,23 @@ def _label(node: dict) -> str:
         return f"图{num}"
     if t == "formula":
         return f"式（{num}）"
-    if t == "item":
-        return f"第{num}条"
-    if t == "clause":
-        return f"第{num}条"
+    if t in ("clause", "item"):
+        # 附录条文用 A.0.1 这种编号，标签也该是"附录A.0.1"而不是"第A.0.1条"
+        return f"附录{num}" if re.match(r"^[A-Z]\.", str(num)) else f"第{num}条"
     if t == "section":
         return f"第{num}节"
+    if t == "appendix":
+        return f"附录{num}"
+    if t == "explanation":
+        return f"条文说明 {num}"
     return f"第{num}节"
 
 
-def render_block(node: dict) -> str:
+def render_block(node: dict, with_standard: bool = False) -> str:
     """把节点渲染成给 LLM 的材料块。表格用扁平表头版，公式带变量表。"""
     label = _label(node)
-    head = f"【{label}】"
+    # 多规范并存时，每块材料都必须标明来自哪本——否则模型无法在答案里说清出处
+    head = f"【{node['standard_code']} {label}】" if with_standard else f"【{label}】"
     if node["section"]:
         head += f"（{node['section']}）"
     if node["modality"]:
@@ -114,6 +137,15 @@ class Answerer:
         # 注意取值是 "none"，"off" 会返回 HTTP 400。
         self.reasoning_effort = reasoning_effort
         self.by_id = {n["node_id"]: n for n in bundle.nodes}
+        # 知识库里有哪些规范：决定提示词怎么写、材料块要不要带标准号
+        self.standards = sorted(
+            {(n.get("standard_id"), n.get("standard_code"), n.get("standard_name") or "")
+             for n in bundle.nodes},
+            key=lambda x: x[1] or "")
+        self.multi_standard = len(self.standards) > 1
+        self.system_prompt = build_system_prompt(
+            [{"id": s[0], "code": s[1], "name": s[2]} for s in self.standards],
+            self.multi_standard)
 
     # ---------------------------------------------------------- 上下文组装
     # 上下文预算：本地 27B 要先吞完材料才吐第一个字，但**实测代价很低**——
@@ -178,12 +210,15 @@ class Answerer:
             # 父条文已收录时不再单独渲染"款"，否则材料里同一段话出现两次
             if n["type"] == "item" and n["parent_id"] in seen_clause:
                 continue
-            text = render_block(n)
+            text = render_block(n, with_standard=self.multi_standard)
             if used + len(text) > max_chars:
                 continue
             used += len(text)
             out.append({"node_id": n["node_id"], "type": n["type"], "num": n["num"],
                         "label": _label(n), "pages": n["pages"], "bboxes": n["bboxes"],
+                        "standard_id": n.get("standard_id", ""),
+                        "standard_code": n.get("standard_code", ""),
+                        "standard_name": n.get("standard_name", ""),
                         "text": text,
                         "image_path": (n["body"] or {}).get("image_path") if n["body"] else None})
         return out
@@ -248,9 +283,10 @@ class Answerer:
         return {
             "question": question,
             "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": self.system_prompt},
                 {"role": "user", "content": f"【材料】\n{material}\n\n【问题】\n{question}"},
             ],
+            "standards": [{"code": s[1], "name": s[2]} for s in self.standards],
             "contexts": contexts,
             "table_rows": self.bundle.tables.find_rows(question, top_k=3),
             "hits": [{"node_id": h["node_id"], "type": h["type"], "num": h["num"],
@@ -306,6 +342,7 @@ class Answerer:
 
     # ---------------------------------------------------------- 入口
     def answer(self, question: str, top_k: int = 6, expand_hops: int = 1,
-               alpha: float = 0.5) -> dict:
-        prepared = self.prepare(question, top_k=top_k, expand_hops=expand_hops, alpha=alpha)
+               alpha: float = 0.5, max_blocks: int = 10) -> dict:
+        prepared = self.prepare(question, top_k=top_k, expand_hops=expand_hops,
+                                alpha=alpha, max_blocks=max_blocks)
         return self.finalize(prepared, self._chat(prepared["messages"]))

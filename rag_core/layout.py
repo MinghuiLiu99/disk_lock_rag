@@ -30,6 +30,9 @@ NOTES_CLAUSE_RE = re.compile(r"^(\d+\.\d+\.\d+)(?!\d)(?!条)")
 SECTION_RE = re.compile(r"^(\d+\.\d+)(?:\s+|(?=\S))([^\d].*)$")
 CHAPTER_RE = re.compile(r"^(\d+)\s+(\S.*)$")
 TABLE_TITLE_RE = re.compile(r"^(?:按)?表\s*([A-Z]?\.?\d+(?:\.\d+)*(?:-\d+)?)\s*(.*)$")
+# 原文偶尔漏印"表"字（实测 DB11 p37：上一张写"表7.2.3-1"，下一张写成"7.2.3-2"）。
+# 备用判据必须**要求 -N 后缀**——否则会把 "7.2.4 平面结构为弧线…" 这种条文号也当成表题。
+TABLE_TITLE_NO_PREFIX_RE = re.compile(r"^([A-Z]?\.?\d+(?:\.\d+)*-\d+)\s+([\u4e00-\u9fff].*)$")
 # 图题里编号与标题之间**可能没有空格**（实测：图1承插型…、图6.2.4可调托撑…、图6.3.5斜杆搭设示意图）。
 # 但正文里的交叉引用（"（图6.2.4）"）不会出现在行首，所以用行首锚定 + 排除紧跟标点即可。
 FIGURE_TITLE_RE = re.compile(r"^图\s*(\d+(?:\.\d+)*(?:-\d+)?)\s*(?![）)、。；：，])(\S.*)$")
@@ -325,13 +328,20 @@ def real_tables(page, lines: list[dict]) -> list[dict]:
                           "n_chars": n_chars, "cells": cells})
             continue
         bbox = [round(v, 2) for v in tb.bbox]
-        titles = [l for l in lines if TABLE_TITLE_RE.match(l["text"])
+        # 表题：优先找带"表"字的，找不到再用"编号+中文"的备用判据（漏印"表"字的情况）
+        def is_title(l: dict) -> bool:
+            return bool(TABLE_TITLE_RE.match(l["text"])
+                        or TABLE_TITLE_NO_PREFIX_RE.match(l["text"]))
+
+        titles = [l for l in lines if is_title(l)
                   and bbox[1] - 50 <= l["top"] <= bbox[1] + 10]
         title_line = max(titles, key=lambda l: l["top"]) if titles else None
         title, table_num = "", None
         if title_line is not None:
-            m = TABLE_TITLE_RE.match(title_line["text"])
+            m = TABLE_TITLE_RE.match(title_line["text"]) \
+                or TABLE_TITLE_NO_PREFIX_RE.match(title_line["text"])
             table_num = re.sub(r"\s+", "", m.group(1))
+            # 备用判据命中的说明原文漏了"表"字，这里补回来
             title = f"表{table_num} {m.group(2).strip()}".strip()
         notes, started = [], False
         note_lines: list[dict] = []
